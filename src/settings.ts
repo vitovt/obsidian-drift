@@ -6,6 +6,7 @@ export interface ExternalDiffSettings {
 	focusDiffOnChange: boolean;
 	wordWrap: boolean;
 	wordLevelHighlighting: boolean;
+	contrastChangedText: boolean;
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
@@ -13,6 +14,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	focusDiffOnChange: false,
 	wordWrap: false,
 	wordLevelHighlighting: false,
+	contrastChangedText: false,
 };
 
 export class ExternalDiffSettingTab extends PluginSettingTab {
@@ -64,6 +66,16 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.wordLevelHighlighting)
 				.onChange(async (value) => {
 					this.plugin.settings.wordLevelHighlighting = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("High-contrast word highlighting")
+			.setDesc("Add a red or green background to changed text when word-level highlighting is enabled")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.contrastChangedText)
+				.onChange(async (value) => {
+					this.plugin.settings.contrastChangedText = value;
 					await this.plugin.saveSettings();
 				}));
 	}

@@ -71,6 +71,7 @@ export class DiffView extends ItemView {
 
 	/** Rebuild diffs only when the algorithm changes; preserve current content. */
 	updateSettings(): void {
+		this.updateContrast();
 		const algorithmChanged = this.wordLevelHighlighting !== this.settings.wordLevelHighlighting;
 		this.wordLevelHighlighting = this.settings.wordLevelHighlighting;
 		for (const [path, section] of this.sections) {
@@ -91,6 +92,11 @@ export class DiffView extends ItemView {
 
 	getViewType(): string {
 		return DIFF_VIEW_TYPE;
+	}
+
+	private updateContrast(): void {
+		this.containerEl.classList.toggle("diff-view-contrast",
+			this.settings.wordLevelHighlighting && this.settings.contrastChangedText);
 	}
 
 	getDisplayText(): string {
@@ -124,6 +130,7 @@ export class DiffView extends ItemView {
 	}
 
 	private render(): void {
+		this.updateContrast();
 		for (const section of this.sections.values()) {
 			section.mergeView?.destroy();
 			section.mergeView = null;
