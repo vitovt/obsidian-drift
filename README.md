@@ -46,6 +46,8 @@ In **Settings → Drift**, enable **Focus diff tab on external change** to switc
 
 Enable **Word wrap** in the same settings to wrap long lines in both diff panes. It is off by default and applies immediately to open diff views without reloading the plugin.
 
+Enable **Word-level highlighting** to highlight changed text within lines using CodeMirror's built-in diff algorithm. It is off by default, preserving Drift's line-based patience diff. Switching algorithms can change chunk boundaries and the alignment of repeated lines or moved Markdown sections. Open comparisons rebuild immediately, keeping current text and partial reverts but resetting editor selection, undo history, and expanded unchanged regions. Word wrap works with either algorithm.
+
 ## Commands
 
 | Command | Description |
