@@ -3,10 +3,14 @@ import type ExternalDiffPlugin from "./main";
 
 export interface ExternalDiffSettings {
 	enabled: boolean;
+	focusDiffOnChange: boolean;
+	wordWrap: boolean;
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
+	focusDiffOnChange: false,
+	wordWrap: false,
 };
 
 export class ExternalDiffSettingTab extends PluginSettingTab {
@@ -28,6 +32,26 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.enabled)
 				.onChange(async (value) => {
 					this.plugin.settings.enabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Focus diff tab on external change")
+			.setDesc("Switch to the diff tab whenever an external change is detected")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.focusDiffOnChange)
+				.onChange(async (value) => {
+					this.plugin.settings.focusDiffOnChange = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Word wrap")
+			.setDesc("Wrap long lines in both sides of the diff view")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.wordWrap)
+				.onChange(async (value) => {
+					this.plugin.settings.wordWrap = value;
 					await this.plugin.saveSettings();
 				}));
 	}
