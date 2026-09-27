@@ -67,7 +67,10 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.wordLevelHighlighting = value;
 					await this.plugin.saveSettings();
+					this.display();
 				}));
+
+		if (!this.plugin.settings.wordLevelHighlighting) return;
 
 		new Setting(containerEl)
 			.setName("High-contrast word highlighting")
