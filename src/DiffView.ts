@@ -1,7 +1,8 @@
 import {ItemView, WorkspaceLeaf} from "obsidian";
 import {Change, MergeView} from "@codemirror/merge";
 import {EditorView, lineNumbers} from "@codemirror/view";
-import {EditorState} from "@codemirror/state";
+import {Compartment, EditorState} from "@codemirror/state";
+import type {ExternalDiffSettings} from "./settings";
 import {patienceDiff} from "./patienceDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
 
@@ -60,9 +61,23 @@ interface FileSection {
 
 export class DiffView extends ItemView {
 	private sections = new Map<string, FileSection>();
+	private lineWrapping = new Compartment();
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings) {
 		super(leaf);
+	}
+
+	/** Apply wrapping without recreating editors or losing edits and folds. */
+	updateSettings(): void {
+		for (const section of this.sections.values()) {
+			if (!section.mergeView) continue;
+			for (const editor of [section.mergeView.a, section.mergeView.b]) {
+				if (editor.lineWrapping === this.settings.wordWrap) continue;
+				editor.dispatch({
+					effects: this.lineWrapping.reconfigure(this.settings.wordWrap ? EditorView.lineWrapping : []),
+				});
+			}
+		}
 	}
 
 	getViewType(): string {
@@ -176,6 +191,7 @@ export class DiffView extends ItemView {
 				extensions: [
 					...foldUnchangedExtension(syncA),
 					lineNumbers(),
+					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 					EditorView.editable.of(false),
 					EditorState.readOnly.of(true),
 				],
@@ -185,6 +201,7 @@ export class DiffView extends ItemView {
 				extensions: [
 					...foldUnchangedExtension(syncB),
 					lineNumbers(),
+					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 				],
 			},
 			parent: section.mergeContainer,

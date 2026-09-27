@@ -41,7 +41,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf));
+		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings));
 
 		// CM6 detection: register updateListener on all editors
 		this.registerEditorExtension(this.createDetectionExtension());
@@ -109,6 +109,9 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	async saveSettings() {
+		for (const leaf of this.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE)) {
+			if (leaf.view instanceof DiffView) leaf.view.updateSettings();
+		}
 		await this.saveData({
 			settings: this.settings,
 			pendingDiffs: this.serializePendingDiffs(),
