@@ -3,6 +3,7 @@ import {Change, MergeView} from "@codemirror/merge";
 import {EditorView, lineNumbers} from "@codemirror/view";
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
+import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
 
@@ -193,6 +194,8 @@ export class DiffView extends ItemView {
 		}
 		if (!section.mergeContainer) return;
 		section.mergeContainer.empty();
+		const syncScroll = createHorizontalScrollSync();
+		const syncScrollEnabled = () => !this.settings.wordWrap;
 
 		const syncA = (index: number) => {
 			section.mergeView?.b.dispatch({effects: toggleFold.of(index)});
@@ -206,6 +209,7 @@ export class DiffView extends ItemView {
 				doc: section.diff.oldContent,
 				extensions: [
 					...foldUnchangedExtension(syncA),
+					synchronizedScroll(syncScroll, () => section.mergeView?.b, syncScrollEnabled),
 					lineNumbers(),
 					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 					EditorView.editable.of(false),
@@ -216,6 +220,7 @@ export class DiffView extends ItemView {
 				doc: section.diff.newContent,
 				extensions: [
 					...foldUnchangedExtension(syncB),
+					synchronizedScroll(syncScroll, () => section.mergeView?.a, syncScrollEnabled),
 					lineNumbers(),
 					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 				],
