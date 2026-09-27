@@ -3,6 +3,7 @@ import {Change, MergeView} from "@codemirror/merge";
 import {EditorView, lineNumbers} from "@codemirror/view";
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
+import {DiffToolbar} from "./diffToolbar";
 import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
@@ -58,12 +59,14 @@ interface FileSection {
 	expanded: boolean;
 	mergeView: MergeView | null;
 	mergeContainer: HTMLElement | null;
+	chevron?: HTMLElement;
 }
 
 export class DiffView extends ItemView {
 	private sections = new Map<string, FileSection>();
 	private lineWrapping = new Compartment();
 	private wordLevelHighlighting: boolean;
+	private toolbar: DiffToolbar | null = null;
 
 	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings) {
 		super(leaf);
@@ -131,8 +134,11 @@ export class DiffView extends ItemView {
 	}
 
 	private render(): void {
+		if (this.toolbar) this.removeChild(this.toolbar);
+		this.toolbar = null;
 		this.updateContrast();
 		for (const section of this.sections.values()) {
+			if (section.mergeView) section.diff.newContent = section.mergeView.b.state.doc.toString();
 			section.mergeView?.destroy();
 			section.mergeView = null;
 			section.mergeContainer = null;
@@ -147,13 +153,10 @@ export class DiffView extends ItemView {
 			return;
 		}
 
-		if (this.sections.size > 1) {
-			const toolbar = container.createDiv({cls: "diff-view-toolbar"});
-			const acceptAllBtn = toolbar.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept all"});
-			const rejectAllBtn = toolbar.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject all"});
-			acceptAllBtn.addEventListener("click", () => this.handleAcceptAll());
-			rejectAllBtn.addEventListener("click", () => this.handleRejectAll());
-		}
+		this.toolbar = this.addChild(new DiffToolbar(container, this.sections.size > 1,
+			value => {
+				for (const [path, section] of this.sections) this.setExpanded(path, section, value);
+			}, () => this.handleAcceptAll(), () => this.handleRejectAll()));
 
 		const scrollArea = container.createDiv({cls: "diff-view-scroll"});
 
@@ -164,11 +167,10 @@ export class DiffView extends ItemView {
 			const header = block.createDiv({cls: "diff-view-section-header"});
 
 			const left = header.createDiv({cls: "diff-view-section-left"});
-			left.createSpan({cls: `diff-view-chevron ${section.expanded ? "is-expanded" : ""}`, text: "›"});
+			section.chevron = left.createSpan({cls: `diff-view-chevron ${section.expanded ? "is-expanded" : ""}`, text: "›"});
 			left.createSpan({cls: "diff-view-filepath", text: path});
 			left.addEventListener("click", () => {
-				section.expanded = !section.expanded;
-				this.render();
+				this.setExpanded(path, section, !section.expanded);
 			});
 
 			const actions = header.createDiv({cls: "diff-view-actions"});
@@ -178,12 +180,19 @@ export class DiffView extends ItemView {
 			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); this.handleAccept(path); });
 			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); this.handleReject(path); });
 
-			if (section.expanded) {
-				const mergeContainer = block.createDiv({cls: "diff-view-merge cm-s-obsidian mod-cm6"});
-				section.mergeContainer = mergeContainer;
-				this.createMergeView(path, section);
-			}
+			section.mergeContainer = block.createDiv({cls: "diff-view-merge cm-s-obsidian mod-cm6"});
+			this.setExpanded(path, section, section.expanded);
 		}
+	}
+
+	private setExpanded(path: string, section: FileSection, expanded: boolean): void {
+		section.expanded = expanded;
+		section.chevron?.classList.toggle("is-expanded", expanded);
+		section.mergeContainer?.toggle(expanded);
+		if (!expanded) return;
+		if (!section.mergeView) this.createMergeView(path, section);
+		section.mergeView?.a.requestMeasure();
+		section.mergeView?.b.requestMeasure();
 	}
 
 	/** Create (or recreate) the MergeView for a section. */
