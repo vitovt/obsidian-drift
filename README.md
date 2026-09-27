@@ -51,8 +51,6 @@ If the file changes again while you have an edited draft, Drift keeps the draft 
 
 The toolbar centers **Accept all** and **Reject all**, separate from the right-aligned per-file actions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
 
-In **Settings → Drift**, enable **Focus diff tab on external change** to switch to the diff tab automatically whenever an external change is detected. This is off by default, so changes open in the background unless you opt in.
-
 Enable **Word wrap** in the same settings to wrap long lines in both diff panes. It is off by default and applies immediately to open diff views without reloading the plugin.
 
 When word wrap is off, horizontal scrolling in either pane automatically scrolls the other pane by the same offset. Each file comparison scrolls independently. If one pane has less content, it stops at its own edge without pulling the longer pane back.
