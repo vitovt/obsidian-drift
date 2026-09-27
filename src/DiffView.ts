@@ -1,10 +1,13 @@
 import {ItemView, WorkspaceLeaf} from "obsidian";
 import {Change, MergeView} from "@codemirror/merge";
-import {EditorView, lineNumbers} from "@codemirror/view";
+import {drawSelection, EditorView, keymap, lineNumbers} from "@codemirror/view";
+import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/commands";
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
 import {DiffToolbar} from "./diffToolbar";
 import {DiffScrollbar} from "./diffScrollbar";
+import {ReviewControls} from "./reviewControls";
+import type {ReviewSnapshot} from "./reviewDraft";
 import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
@@ -47,12 +50,13 @@ function lineDiff(a: string, b: string): readonly Change[] {
 
 export const DIFF_VIEW_TYPE = "external-diff-view";
 
-export interface PendingDiff {
-	oldContent: string;
-	newContent: string;
-	onAccept: (content: string) => void;
-	onReject: () => void;
-	onWrite: (content: string) => void;
+export interface PendingDiff extends ReviewSnapshot {
+	/** Session-only history and selection; only the draft text is persisted. */
+	editorState?: EditorState;
+	onAccept: (content: string) => Promise<boolean>;
+	onReject: () => Promise<boolean>;
+	onDraftChange: (content: string) => void;
+	onReviewLatest: () => Promise<void>;
 }
 
 interface FileSection {
@@ -62,6 +66,7 @@ interface FileSection {
 	mergeContainer: HTMLElement | null;
 	chevron?: HTMLElement;
 	scrollbar?: DiffScrollbar;
+	reviewControls?: ReviewControls;
 }
 
 export class DiffView extends ItemView {
@@ -69,6 +74,7 @@ export class DiffView extends ItemView {
 	private lineWrapping = new Compartment();
 	private wordLevelHighlighting: boolean;
 	private toolbar: DiffToolbar | null = null;
+	private applying = new Set<string>();
 
 	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings) {
 		super(leaf);
@@ -83,7 +89,6 @@ export class DiffView extends ItemView {
 		for (const [path, section] of this.sections) {
 			if (!section.mergeView) continue;
 			if (algorithmChanged) {
-				section.diff.newContent = section.mergeView.b.state.doc.toString();
 				this.createMergeView(path, section);
 				continue;
 			}
@@ -128,6 +133,11 @@ export class DiffView extends ItemView {
 		this.render();
 	}
 
+	updateReviewStatus(path: string): void {
+		const section = this.sections.get(path);
+		if (section) section.reviewControls?.update(section.diff.conflicted);
+	}
+
 	async onOpen(): Promise<void> {}
 
 	onClose(): Promise<void> {
@@ -143,7 +153,6 @@ export class DiffView extends ItemView {
 		this.toolbar = null;
 		this.updateContrast();
 		for (const section of this.sections.values()) {
-			if (section.mergeView) section.diff.newContent = section.mergeView.b.state.doc.toString();
 			this.destroyMergeView(section);
 			section.mergeView = null;
 			section.mergeContainer = null;
@@ -161,7 +170,7 @@ export class DiffView extends ItemView {
 		this.toolbar = this.addChild(new DiffToolbar(container, this.sections.size > 1,
 			value => {
 				for (const [path, section] of this.sections) this.setExpanded(path, section, value);
-			}, () => this.handleAcceptAll(), () => this.handleRejectAll()));
+			}, () => { void this.handleAcceptAll(); }, () => { void this.handleRejectAll(); }));
 
 		const scrollArea = container.createDiv({cls: "diff-view-scroll"});
 
@@ -182,8 +191,8 @@ export class DiffView extends ItemView {
 			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
 			const rejectBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject"});
 
-			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); this.handleAccept(path); });
-			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); this.handleReject(path); });
+			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleAccept(path); });
+			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleReject(path); });
 
 			section.mergeContainer = block.createDiv({cls: "diff-view-merge cm-s-obsidian mod-cm6"});
 			this.setExpanded(path, section, section.expanded);
@@ -202,6 +211,9 @@ export class DiffView extends ItemView {
 	}
 
 	private destroyMergeView(section: FileSection): void {
+		if (section.mergeView) section.diff.editorState = section.mergeView.b.state;
+		if (section.reviewControls) this.removeChild(section.reviewControls);
+		section.reviewControls = undefined;
 		if (section.scrollbar) this.removeChild(section.scrollbar);
 		section.scrollbar = undefined;
 		section.mergeView?.destroy();
@@ -213,6 +225,8 @@ export class DiffView extends ItemView {
 		this.destroyMergeView(section);
 		if (!section.mergeContainer) return;
 		section.mergeContainer.empty();
+		section.reviewControls = this.addChild(new ReviewControls(section.mergeContainer,
+			() => section.mergeView?.b, section.diff.onReviewLatest));
 		const syncScroll = createHorizontalScrollSync();
 		const syncScrollEnabled = () => !this.settings.wordWrap;
 
@@ -237,8 +251,20 @@ export class DiffView extends ItemView {
 				],
 			},
 			b: {
-				doc: section.diff.newContent,
+				doc: section.diff.draftContent,
+				selection: section.diff.editorState?.selection,
 				extensions: [
+					history(),
+					EditorState.transactionFilter.of(tr => this.applying.has(path) && tr.docChanged ? [] : tr),
+					...(section.diff.editorState ? [historyField.init(() => section.diff.editorState!.field(historyField))] : []),
+					keymap.of([...historyKeymap, ...defaultKeymap]),
+					drawSelection(),
+					EditorView.contentAttributes.of({"aria-label": "Result, editable draft"}),
+					EditorView.updateListener.of(update => {
+						section.diff.editorState = update.state;
+						if (update.docChanged) section.diff.onDraftChange(update.state.doc.toString());
+						section.reviewControls?.update(section.diff.conflicted);
+					}),
 					...foldUnchangedExtension(syncB),
 					synchronizedScroll(syncScroll, () => section.mergeView?.a, syncScrollEnabled, () => section.scrollbar?.dom),
 					EditorView.updateListener.of(() => section.scrollbar?.refresh()),
@@ -251,8 +277,9 @@ export class DiffView extends ItemView {
 			renderRevertControl: () => {
 				const btn = createEl("button");
 				btn.className = "diff-view-revert-btn";
-				btn.textContent = "←";
-				btn.title = "Revert this change";
+				btn.textContent = "→";
+				btn.title = "Restore original block";
+				btn.setAttribute("aria-label", "Restore original block");
 				return btn;
 			},
 			highlightChanges: true,
@@ -269,64 +296,44 @@ export class DiffView extends ItemView {
 		const rangesB = computeUnchangedRanges(section.mergeView.b.state.doc, chunks, "b", 2, 4);
 		section.mergeView.a.dispatch({effects: setFoldRanges.of(rangesA)});
 		section.mergeView.b.dispatch({effects: setFoldRanges.of(rangesB)});
-
-		// Write to disk on per-chunk revert. CM6 handles revert via mousedown on .cm-merge-revert container.
-		const revertContainer = section.mergeContainer?.querySelector(".cm-merge-revert");
-		if (revertContainer) {
-			revertContainer.addEventListener("mousedown", () => {
-				activeWindow.setTimeout(() => {
-					if (!section.mergeView) return;
-					const content = section.mergeView.b.state.doc.toString();
-					section.diff.onWrite(content);
-					section.diff.newContent = content;
-					if (content === section.diff.oldContent) {
-						this.removeFile(path);
-					}
-				}, 50);
-			});
-		}
+		section.reviewControls.update(section.diff.conflicted);
 	}
 
 	/** Accept current state of editor B (includes any partial chunk reverts). */
-	private handleAccept(path: string): void {
+	private async handleAccept(path: string): Promise<void> {
 		const section = this.sections.get(path);
-		if (!section) return;
+		if (!section || this.applying.has(path)) return;
 		const content = section.mergeView
 			? section.mergeView.b.state.doc.toString()
-			: section.diff.newContent;
-		section.diff.onAccept(content);
-		this.removeFile(path);
+			: section.diff.draftContent;
+		this.applying.add(path);
+		try {
+			if (await section.diff.onAccept(content) && this.sections.get(path) === section) this.removeFile(path);
+		} finally {
+			this.applying.delete(path);
+		}
 	}
 
 	/** Reject changes for a file. */
-	private handleReject(path: string): void {
+	private async handleReject(path: string): Promise<void> {
 		const section = this.sections.get(path);
-		if (!section) return;
-		section.diff.onReject();
-		this.removeFile(path);
+		if (!section || this.applying.has(path)) return;
+		this.applying.add(path);
+		try {
+			if (await section.diff.onReject() && this.sections.get(path) === section) this.removeFile(path);
+		} finally {
+			this.applying.delete(path);
+		}
 	}
 
 	/** Accept all files and close the diff view. */
-	private handleAcceptAll(): void {
-		for (const [, section] of this.sections) {
-			const content = section.mergeView
-				? section.mergeView.b.state.doc.toString()
-				: section.diff.newContent;
-			section.diff.onAccept(content);
-			this.destroyMergeView(section);
-		}
-		this.sections.clear();
-		this.leaf.detach();
+	private async handleAcceptAll(): Promise<void> {
+		for (const path of [...this.sections.keys()]) await this.handleAccept(path);
 	}
 
 	/** Reject all files and close the diff view. */
-	private handleRejectAll(): void {
-		for (const [, section] of this.sections) {
-			section.diff.onReject();
-			this.destroyMergeView(section);
-		}
-		this.sections.clear();
-		this.leaf.detach();
+	private async handleRejectAll(): Promise<void> {
+		for (const path of [...this.sections.keys()]) await this.handleReject(path);
 	}
 
 	/** Remove a resolved file and re-render or close if empty. */
