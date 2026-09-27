@@ -5,7 +5,7 @@ export function createHorizontalScrollSync() {
 	const expected = new WeakMap<HTMLElement, number>();
 	const previous = new WeakMap<HTMLElement, number>();
 
-	return (source: HTMLElement, target: HTMLElement, enabled: boolean): void => {
+	return (source: HTMLElement, targets: HTMLElement | HTMLElement[], enabled: boolean): void => {
 		const left = source.scrollLeft;
 		const last = previous.get(source) ?? 0;
 		previous.set(source, left);
@@ -13,10 +13,12 @@ export function createHorizontalScrollSync() {
 		expected.delete(source);
 		// Ignore vertical scrolling and events caused by our own scroll writes.
 		if (!enabled || left === last || left === pending) return;
-		if (target.scrollLeft === left) return;
-		target.scrollLeft = left;
-		// Read back the actual offset: the other pane may be shorter and clamp it.
-		expected.set(target, target.scrollLeft);
+		for (const target of Array.isArray(targets) ? targets : [targets]) {
+			if (target.scrollLeft === left) continue;
+			target.scrollLeft = left;
+			// Read back the actual offset: a shorter pane may clamp it.
+			expected.set(target, target.scrollLeft);
+		}
 	};
 }
 
@@ -25,12 +27,14 @@ export function synchronizedScroll(
 	sync: ReturnType<typeof createHorizontalScrollSync>,
 	getSibling: () => EditorView | undefined,
 	isEnabled: () => boolean,
+	getScrollbar: () => HTMLElement | undefined = () => undefined,
 ) {
 	return EditorView.domEventHandlers({
 		scroll(event, view) {
 			const sibling = getSibling();
 			if (event.target === view.scrollDOM && sibling) {
-				sync(view.scrollDOM, sibling.scrollDOM, isEnabled());
+				const scrollbar = getScrollbar();
+				sync(view.scrollDOM, scrollbar ? [sibling.scrollDOM, scrollbar] : sibling.scrollDOM, isEnabled());
 			}
 		},
 	});

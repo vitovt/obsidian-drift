@@ -37,6 +37,7 @@
 
 .diff-view-scroll {
 	flex: 1;
+	min-height: 0;
 	overflow-y: auto;
 }
 
@@ -126,6 +127,20 @@
 .diff-view-merge .cm-mergeView {
 	max-height: 60vh;
 	overflow: auto;
+}
+
+.diff-view-horizontal-scroll {
+	position: sticky;
+	bottom: 0;
+	z-index: 5;
+	height: 16px;
+	overflow-x: scroll;
+	overflow-y: hidden;
+	background: var(--background-primary);
+}
+
+.diff-view-horizontal-track {
+	height: 1px;
 }
 
 /* Diff highlight colors — vibrant base colors at moderate opacity */
