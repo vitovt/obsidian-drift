@@ -62,15 +62,24 @@ interface FileSection {
 export class DiffView extends ItemView {
 	private sections = new Map<string, FileSection>();
 	private lineWrapping = new Compartment();
+	private wordLevelHighlighting: boolean;
 
 	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings) {
 		super(leaf);
+		this.wordLevelHighlighting = settings.wordLevelHighlighting;
 	}
 
-	/** Apply wrapping without recreating editors or losing edits and folds. */
+	/** Rebuild diffs only when the algorithm changes; preserve current content. */
 	updateSettings(): void {
-		for (const section of this.sections.values()) {
+		const algorithmChanged = this.wordLevelHighlighting !== this.settings.wordLevelHighlighting;
+		this.wordLevelHighlighting = this.settings.wordLevelHighlighting;
+		for (const [path, section] of this.sections) {
 			if (!section.mergeView) continue;
+			if (algorithmChanged) {
+				section.diff.newContent = section.mergeView.b.state.doc.toString();
+				this.createMergeView(path, section);
+				continue;
+			}
 			for (const editor of [section.mergeView.a, section.mergeView.b]) {
 				if (editor.lineWrapping === this.settings.wordWrap) continue;
 				editor.dispatch({
@@ -215,7 +224,7 @@ export class DiffView extends ItemView {
 			},
 			highlightChanges: true,
 			gutter: false,
-			diffConfig: {override: lineDiff},
+			diffConfig: this.settings.wordLevelHighlighting ? undefined : {override: lineDiff},
 		});
 
 		// Compute unchanged ranges and dispatch initial folds

@@ -5,12 +5,14 @@ export interface ExternalDiffSettings {
 	enabled: boolean;
 	focusDiffOnChange: boolean;
 	wordWrap: boolean;
+	wordLevelHighlighting: boolean;
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	focusDiffOnChange: false,
 	wordWrap: false,
+	wordLevelHighlighting: false,
 };
 
 export class ExternalDiffSettingTab extends PluginSettingTab {
@@ -52,6 +54,16 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.wordWrap)
 				.onChange(async (value) => {
 					this.plugin.settings.wordWrap = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Word-level highlighting")
+			.setDesc("Highlight changes within lines using the built-in diff algorithm. May change how blocks align; unchanged regions collapse when toggled.")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.wordLevelHighlighting)
+				.onChange(async (value) => {
+					this.plugin.settings.wordLevelHighlighting = value;
 					await this.plugin.saveSettings();
 				}));
 	}
