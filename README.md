@@ -42,11 +42,15 @@ Once enabled, the plugin runs automatically. When an external tool modifies a ma
 3. Use the **revert button** on individual chunks to selectively undo specific changes
 4. Use the **Open diff viewer** command to reopen the tab if you close it
 
+The toolbar centers **Accept all** and **Reject all**, separate from the right-aligned per-file actions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
+
 In **Settings → Drift**, enable **Focus diff tab on external change** to switch to the diff tab automatically whenever an external change is detected. This is off by default, so changes open in the background unless you opt in.
 
 Enable **Word wrap** in the same settings to wrap long lines in both diff panes. It is off by default and applies immediately to open diff views without reloading the plugin.
 
 When word wrap is off, horizontal scrolling in either pane automatically scrolls the other pane by the same offset. Each file comparison scrolls independently. If one pane has less content, it stops at its own edge without pulling the longer pane back.
+
+A shared horizontal scrollbar stays at the bottom of each visible comparison, outside its vertically scrolling text, so long files can be scrolled horizontally without reaching their last line. It is hidden when word wrap is enabled or neither pane overflows.
 
 Enable **Word-level highlighting** to highlight changed text within lines using CodeMirror's built-in diff algorithm. It is off by default, preserving Drift's line-based patience diff. Switching algorithms can change chunk boundaries and the alignment of repeated lines or moved Markdown sections. Open comparisons rebuild immediately, keeping current text and partial reverts but resetting editor selection, undo history, and expanded unchanged regions. Word wrap works with either algorithm.
 
