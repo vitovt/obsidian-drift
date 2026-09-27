@@ -4,6 +4,7 @@ import {EditorView, lineNumbers} from "@codemirror/view";
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
 import {DiffToolbar} from "./diffToolbar";
+import {DiffScrollbar} from "./diffScrollbar";
 import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
@@ -60,6 +61,7 @@ interface FileSection {
 	mergeView: MergeView | null;
 	mergeContainer: HTMLElement | null;
 	chevron?: HTMLElement;
+	scrollbar?: DiffScrollbar;
 }
 
 export class DiffView extends ItemView {
@@ -91,6 +93,7 @@ export class DiffView extends ItemView {
 					effects: this.lineWrapping.reconfigure(this.settings.wordWrap ? EditorView.lineWrapping : []),
 				});
 			}
+			section.scrollbar?.refresh();
 		}
 	}
 
@@ -119,6 +122,8 @@ export class DiffView extends ItemView {
 
 	/** Add or update a file's diff. */
 	addFile(path: string, diff: PendingDiff): void {
+		const previous = this.sections.get(path);
+		if (previous) this.destroyMergeView(previous);
 		this.sections.set(path, {diff, expanded: true, mergeView: null, mergeContainer: null});
 		this.render();
 	}
@@ -127,7 +132,7 @@ export class DiffView extends ItemView {
 
 	onClose(): Promise<void> {
 		for (const section of this.sections.values()) {
-			section.mergeView?.destroy();
+			this.destroyMergeView(section);
 		}
 		this.sections.clear();
 		return Promise.resolve();
@@ -139,7 +144,7 @@ export class DiffView extends ItemView {
 		this.updateContrast();
 		for (const section of this.sections.values()) {
 			if (section.mergeView) section.diff.newContent = section.mergeView.b.state.doc.toString();
-			section.mergeView?.destroy();
+			this.destroyMergeView(section);
 			section.mergeView = null;
 			section.mergeContainer = null;
 		}
@@ -193,14 +198,19 @@ export class DiffView extends ItemView {
 		if (!section.mergeView) this.createMergeView(path, section);
 		section.mergeView?.a.requestMeasure();
 		section.mergeView?.b.requestMeasure();
+		section.scrollbar?.refresh();
+	}
+
+	private destroyMergeView(section: FileSection): void {
+		if (section.scrollbar) this.removeChild(section.scrollbar);
+		section.scrollbar = undefined;
+		section.mergeView?.destroy();
+		section.mergeView = null;
 	}
 
 	/** Create (or recreate) the MergeView for a section. */
 	private createMergeView(path: string, section: FileSection): void {
-		if (section.mergeView) {
-			section.mergeView.destroy();
-			section.mergeView = null;
-		}
+		this.destroyMergeView(section);
 		if (!section.mergeContainer) return;
 		section.mergeContainer.empty();
 		const syncScroll = createHorizontalScrollSync();
@@ -218,7 +228,8 @@ export class DiffView extends ItemView {
 				doc: section.diff.oldContent,
 				extensions: [
 					...foldUnchangedExtension(syncA),
-					synchronizedScroll(syncScroll, () => section.mergeView?.b, syncScrollEnabled),
+					synchronizedScroll(syncScroll, () => section.mergeView?.b, syncScrollEnabled, () => section.scrollbar?.dom),
+					EditorView.updateListener.of(() => section.scrollbar?.refresh()),
 					lineNumbers(),
 					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 					EditorView.editable.of(false),
@@ -229,7 +240,8 @@ export class DiffView extends ItemView {
 				doc: section.diff.newContent,
 				extensions: [
 					...foldUnchangedExtension(syncB),
-					synchronizedScroll(syncScroll, () => section.mergeView?.a, syncScrollEnabled),
+					synchronizedScroll(syncScroll, () => section.mergeView?.a, syncScrollEnabled, () => section.scrollbar?.dom),
+					EditorView.updateListener.of(() => section.scrollbar?.refresh()),
 					lineNumbers(),
 					this.lineWrapping.of(this.settings.wordWrap ? EditorView.lineWrapping : []),
 				],
@@ -247,6 +259,9 @@ export class DiffView extends ItemView {
 			gutter: false,
 			diffConfig: this.settings.wordLevelHighlighting ? undefined : {override: lineDiff},
 		});
+
+		section.scrollbar = this.addChild(new DiffScrollbar(section.mergeContainer,
+			section.mergeView, syncScrollEnabled, syncScroll));
 
 		// Compute unchanged ranges and dispatch initial folds
 		const chunks = section.mergeView.chunks;
@@ -298,7 +313,7 @@ export class DiffView extends ItemView {
 				? section.mergeView.b.state.doc.toString()
 				: section.diff.newContent;
 			section.diff.onAccept(content);
-			section.mergeView?.destroy();
+			this.destroyMergeView(section);
 		}
 		this.sections.clear();
 		this.leaf.detach();
@@ -308,7 +323,7 @@ export class DiffView extends ItemView {
 	private handleRejectAll(): void {
 		for (const [, section] of this.sections) {
 			section.diff.onReject();
-			section.mergeView?.destroy();
+			this.destroyMergeView(section);
 		}
 		this.sections.clear();
 		this.leaf.detach();
@@ -317,7 +332,7 @@ export class DiffView extends ItemView {
 	/** Remove a resolved file and re-render or close if empty. */
 	removeFile(path: string): void {
 		const section = this.sections.get(path);
-		section?.mergeView?.destroy();
+		if (section) this.destroyMergeView(section);
 		this.sections.delete(path);
 		if (this.sections.size === 0) {
 			this.leaf.detach();
