@@ -44,6 +44,8 @@ Once enabled, the plugin runs automatically. When an external tool modifies a ma
 
 In **Settings → Drift**, enable **Focus diff tab on external change** to switch to the diff tab automatically whenever an external change is detected. This is off by default, so changes open in the background unless you opt in.
 
+Enable **Word wrap** in the same settings to wrap long lines in both diff panes. It is off by default and applies immediately to open diff views without reloading the plugin.
+
 ## Commands
 
 | Command | Description |
