@@ -11,11 +11,28 @@
 }
 
 .diff-view-toolbar {
-	display: flex;
-	justify-content: center;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+	align-items: center;
+	flex-shrink: 0;
 	gap: 6px;
 	padding: 6px 12px;
 	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.diff-view-toolbar-navigation,
+.diff-view-toolbar-actions {
+	display: flex;
+	gap: 6px;
+}
+
+.diff-view-toolbar-navigation {
+	justify-self: start;
+	flex-wrap: wrap;
+}
+
+.diff-view-toolbar-actions {
+	grid-column: 2;
 }
 
 .diff-view-scroll {
