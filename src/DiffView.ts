@@ -179,7 +179,7 @@ export class DiffView extends ItemView {
 				const entries = Array.from(this.sections, ([path, {diff}]) => ({
 					path, oldContent: diff.oldContent, draftContent: diff.draftContent, conflicted: diff.conflicted,
 				})).filter(entry => entry.oldContent !== entry.draftContent);
-				new ExportModal(this.app, entries, this.settings.exportFilenameTemplate, this.settings.exportContextLines).open();
+				new ExportModal(this.app, entries, this.settings.exportFilenameTemplate, this.settings.exportContextLines, this.settings.exportUnicodePaths).open();
 			}));
 		this.updateExportAvailability();
 

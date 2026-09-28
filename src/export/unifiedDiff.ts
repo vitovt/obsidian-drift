@@ -11,14 +11,20 @@ export function validContextLines(value: unknown): value is number {
 	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-/** Git-compatible C quoting, including UTF-8 byte escapes for unusual paths. */
-function quotePath(path: string): string {
+/** Keep C quoting for whitespace/control characters, with optional readable Unicode. */
+function quotePath(path: string, unicodePaths: boolean): string {
 	if (/^[\w./-]+$/.test(path)) return path;
 	let quoted = '"';
-	for (const byte of new TextEncoder().encode(path)) {
-		if (byte === 34 || byte === 92) quoted += "\\" + String.fromCharCode(byte);
-		else if (byte < 32 || byte >= 127) quoted += "\\" + ("00" + byte.toString(8)).slice(-3);
-		else quoted += String.fromCharCode(byte);
+	for (const character of path) {
+		if (unicodePaths && character.codePointAt(0)! >= 128) {
+			quoted += character;
+			continue;
+		}
+		for (const byte of new TextEncoder().encode(character)) {
+			if (byte === 34 || byte === 92) quoted += "\\" + String.fromCharCode(byte);
+			else if (byte < 32 || byte >= 127) quoted += "\\" + ("00" + byte.toString(8)).slice(-3);
+			else quoted += String.fromCharCode(byte);
+		}
 	}
 	return quoted + '"';
 }
@@ -32,7 +38,7 @@ function range(before: number, count: number): string {
 	return `${count === 0 ? before : before + 1},${count}`;
 }
 
-function filePatch(entry: ExportEntry, context: number): string {
+function filePatch(entry: ExportEntry, context: number, unicodePaths: boolean): string {
 	if (entry.oldContent === entry.draftContent) return "";
 	if (!entry.path || entry.path.startsWith("/") || entry.path.includes("\\") ||
 		entry.path.split("/").some(part => !part || part === "." || part === "..")) {
@@ -51,7 +57,7 @@ function filePatch(entry: ExportEntry, context: number): string {
 		if (previous && start <= previous.end) previous.end = Math.max(previous.end, end);
 		else groups.push({start, end});
 	}
-	const a = quotePath(`a/${entry.path}`), b = quotePath(`b/${entry.path}`);
+	const a = quotePath(`a/${entry.path}`, unicodePaths), b = quotePath(`b/${entry.path}`, unicodePaths);
 	const output = [`diff --git ${a} ${b}\n--- ${a}\n+++ ${b}\n`];
 	for (const {start, end} of groups) {
 		output.push(`@@ -${range(oldPositions[start]!, oldPositions[end]! - oldPositions[start]!)} +${range(newPositions[start]!, newPositions[end]! - newPositions[start]!)} @@\n`);
@@ -66,7 +72,7 @@ function filePatch(entry: ExportEntry, context: number): string {
 }
 
 /** Export a frozen Original -> Result snapshot, independent of viewer folding. */
-export function createUnifiedExport(entries: readonly ExportEntry[], context = 3, date = new Date()): string {
+export function createUnifiedExport(entries: readonly ExportEntry[], context = 3, date = new Date(), unicodePaths = true): string {
 	if (!validContextLines(context)) throw new Error("Context lines must be a non-negative integer.");
 	const changed = entries.filter(entry => entry.oldContent !== entry.draftContent)
 		.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
@@ -83,5 +89,5 @@ export function createUnifiedExport(entries: readonly ExportEntry[], context = 3
 		...changed.map(entry => `  ${JSON.stringify(entry.path)}${entry.conflicted ? " [disk changed since review]" : ""}`),
 		"", "",
 	].join("\n");
-	return header + changed.map(entry => filePatch(entry, context)).join("");
+	return header + changed.map(entry => filePatch(entry, context, unicodePaths)).join("");
 }

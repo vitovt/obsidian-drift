@@ -11,6 +11,7 @@ export interface ExternalDiffSettings {
 	contrastChangedText: boolean;
 	exportFilenameTemplate: string;
 	exportContextLines: number;
+	exportUnicodePaths: boolean;
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
@@ -21,6 +22,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	contrastChangedText: false,
 	exportFilenameTemplate: DEFAULT_EXPORT_TEMPLATE,
 	exportContextLines: 3,
+	exportUnicodePaths: true,
 };
 
 export class ExternalDiffSettingTab extends PluginSettingTab {

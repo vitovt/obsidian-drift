@@ -4,6 +4,14 @@ import {formatExportFilename} from "./filename";
 import {validContextLines} from "./unifiedDiff";
 
 export function addExportSettings(container: HTMLElement, plugin: ExternalDiffPlugin): void {
+	// eslint-disable-next-line obsidianmd/ui/sentence-case -- Unicode is a proper name.
+	new Setting(container).setName("Readable Unicode paths")
+		// eslint-disable-next-line obsidianmd/ui/sentence-case -- Unicode is a proper name.
+		.setDesc("Keep Unicode characters and emoji readable in exported patch paths. Turn off to use octal byte escapes.")
+		.addToggle(toggle => toggle.setValue(plugin.settings.exportUnicodePaths).onChange(async value => {
+			plugin.settings.exportUnicodePaths = value;
+			await plugin.saveSettings();
+		}));
 	const filename = new Setting(container).setName("Export filename template")
 		// Date format tokens are intentionally case-sensitive.
 		// eslint-disable-next-line obsidianmd/ui/sentence-case

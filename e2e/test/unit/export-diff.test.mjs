@@ -15,7 +15,7 @@ const {createUnifiedExport, formatExportFilename, availableFilename, filenameErr
 
 const fixtures = [
   ['nested/note.md', 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\n', 'ONE\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nTEN\n'],
-  ['Українська/з пробілами.md', 'старе\n', 'нове\n'],
+  ['Українська/🛠️з пробілами.md', 'старе\n', 'нове\n'],
   ['quotes " tab\t.md', 'a\nb', 'a\nc'],
   ['empty.md', '', 'new\n'],
   ['emptied.md', 'old\n', ''],
@@ -26,9 +26,10 @@ const fixtures = [
   ['same.md', 'same\n', 'same\n'],
 ].map(([path, oldContent, draftContent]) => ({path, oldContent, draftContent}));
 
+for (const unicodePaths of [true, false]) {
 for (const context of [0, 1, 3, 20]) {
   for (const tool of ['git', 'patch']) {
-    test(`${tool} applies multi-file export with ${context} context lines`, async () => {
+    test(`${tool} applies multi-file export with ${context} context lines, Unicode paths: ${unicodePaths}`, async () => {
       const root = await mkdtemp(join(tmpdir(), 'drift-export-'));
       try {
         for (const entry of fixtures) {
@@ -36,7 +37,7 @@ for (const context of [0, 1, 3, 20]) {
           await mkdir(dirname(path), {recursive: true});
           await writeFile(path, entry.oldContent);
         }
-        const patch = createUnifiedExport(fixtures, context);
+        const patch = createUnifiedExport(fixtures, context, new Date(), unicodePaths);
         const args = tool === 'git' ? ['apply', ...(context === 0 ? ['--unidiff-zero'] : []), '-'] : ['--batch', '-p1'];
         const applied = spawnSync(tool, args, {cwd: root, input: patch, encoding: 'utf8', timeout: 5000});
         assert.equal(applied.status, 0, applied.stdout + applied.stderr);
@@ -45,6 +46,17 @@ for (const context of [0, 1, 3, 20]) {
     });
   }
 }
+}
+
+test('Unicode paths are readable by default and optionally byte-escaped', () => {
+  const entry = fixtures[1];
+  const readable = createUnifiedExport([entry]).split('diff --git ')[1];
+  assert.ok(readable.includes(`"a/${entry.path}"`));
+  assert.ok(readable.includes(`"b/${entry.path}"`));
+  const escaped = createUnifiedExport([entry], 3, new Date(), false).split('diff --git ')[1];
+  assert.ok(!escaped.includes('🛠️'));
+  assert.ok(escaped.includes('\\360\\237'));
+});
 
 test('metadata is deterministic and unchanged entries are omitted', () => {
   const patch = createUnifiedExport(fixtures, 3, new Date('2026-09-28T12:30:00Z'));

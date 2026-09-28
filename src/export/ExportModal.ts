@@ -15,7 +15,7 @@ export class ExportModal extends Modal {
 	private date = new Date();
 	private patch = "";
 
-	constructor(app: App, private entries: ExportEntry[], private template: string, private context: number) {
+	constructor(app: App, private entries: ExportEntry[], private template: string, private context: number, private unicodePaths: boolean) {
 		super(app);
 	}
 
@@ -51,7 +51,7 @@ export class ExportModal extends Modal {
 			const name = await availableFilename(formatExportFilename(this.template, this.date),
 				path => this.app.vault.adapter.exists(path));
 			if (this.closed) return;
-			this.patch = createUnifiedExport(this.entries, this.context, this.date);
+			this.patch = createUnifiedExport(this.entries, this.context, this.date, this.unicodePaths);
 			if (!this.patch) throw new Error("There are no changes to export.");
 			this.filename.setValue(name).setDisabled(false);
 			await this.validate();
