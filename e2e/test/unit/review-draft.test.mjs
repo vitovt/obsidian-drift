@@ -8,6 +8,8 @@ const mock = `
 export class Component {}
 export class Plugin {}
 export class ItemView {}
+export class FileView {}
+export class FileSystemAdapter {}
 export class Modal {}
 export class PluginSettingTab {}
 export class Setting {}
@@ -24,6 +26,8 @@ const result = await build({
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
+    b.onResolve({filter: /^electron$/}, () => ({path: 'electron', namespace: 'electron-mock'}));
+    b.onLoad({filter: /.*/, namespace: 'electron-mock'}, () => ({contents: 'export const shell = {};', loader: 'js'}));
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });

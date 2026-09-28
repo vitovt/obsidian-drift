@@ -5,6 +5,7 @@ import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/c
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
 import {DiffToolbar} from "./diffToolbar";
+import {ExportModal} from "./export/ExportModal";
 import {DiffScrollbar} from "./diffScrollbar";
 import {ReviewControls} from "./reviewControls";
 import type {ReviewSnapshot} from "./reviewDraft";
@@ -148,6 +149,10 @@ export class DiffView extends ItemView {
 		return Promise.resolve();
 	}
 
+	private updateExportAvailability(): void {
+		this.toolbar?.setExportEnabled(Array.from(this.sections.values()).some(({diff}) => diff.oldContent !== diff.draftContent));
+	}
+
 	private render(): void {
 		if (this.toolbar) this.removeChild(this.toolbar);
 		this.toolbar = null;
@@ -170,7 +175,13 @@ export class DiffView extends ItemView {
 		this.toolbar = this.addChild(new DiffToolbar(container, this.sections.size > 1,
 			value => {
 				for (const [path, section] of this.sections) this.setExpanded(path, section, value);
-			}, () => { void this.handleAcceptAll(); }, () => { void this.handleRejectAll(); }));
+			}, () => { void this.handleAcceptAll(); }, () => { void this.handleRejectAll(); }, () => {
+				const entries = Array.from(this.sections, ([path, {diff}]) => ({
+					path, oldContent: diff.oldContent, draftContent: diff.draftContent, conflicted: diff.conflicted,
+				})).filter(entry => entry.oldContent !== entry.draftContent);
+				new ExportModal(this.app, entries, this.settings.exportFilenameTemplate, this.settings.exportContextLines).open();
+			}));
+		this.updateExportAvailability();
 
 		const scrollArea = container.createDiv({cls: "diff-view-scroll"});
 
@@ -262,7 +273,10 @@ export class DiffView extends ItemView {
 					EditorView.contentAttributes.of({"aria-label": "Result, editable draft"}),
 					EditorView.updateListener.of(update => {
 						section.diff.editorState = update.state;
-						if (update.docChanged) section.diff.onDraftChange(update.state.doc.toString());
+						if (update.docChanged) {
+							section.diff.onDraftChange(update.state.doc.toString());
+							this.updateExportAvailability();
+						}
 						section.reviewControls?.update(section.diff.conflicted);
 					}),
 					...foldUnchangedExtension(syncB),

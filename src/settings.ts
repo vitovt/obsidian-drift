@@ -1,5 +1,7 @@
 import {App, PluginSettingTab, Setting} from "obsidian";
 import type ExternalDiffPlugin from "./main";
+import {DEFAULT_EXPORT_TEMPLATE} from "./export/filename";
+import {addExportSettings} from "./export/settings";
 
 export interface ExternalDiffSettings {
 	enabled: boolean;
@@ -7,6 +9,8 @@ export interface ExternalDiffSettings {
 	wordWrap: boolean;
 	wordLevelHighlighting: boolean;
 	contrastChangedText: boolean;
+	exportFilenameTemplate: string;
+	exportContextLines: number;
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
@@ -15,6 +19,8 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	wordWrap: false,
 	wordLevelHighlighting: false,
 	contrastChangedText: false,
+	exportFilenameTemplate: DEFAULT_EXPORT_TEMPLATE,
+	exportContextLines: 3,
 };
 
 export class ExternalDiffSettingTab extends PluginSettingTab {
@@ -70,16 +76,17 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					this.display();
 				}));
 
-		if (!this.plugin.settings.wordLevelHighlighting) return;
-
-		new Setting(containerEl)
-			.setName("High-contrast word highlighting")
-			.setDesc("Add a red or green background to changed text when word-level highlighting is enabled")
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.contrastChangedText)
-				.onChange(async (value) => {
-					this.plugin.settings.contrastChangedText = value;
-					await this.plugin.saveSettings();
-				}));
+		if (this.plugin.settings.wordLevelHighlighting) {
+			new Setting(containerEl)
+				.setName("High-contrast word highlighting")
+				.setDesc("Add a red or green background to changed text when word-level highlighting is enabled")
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.contrastChangedText)
+					.onChange(async (value) => {
+						this.plugin.settings.contrastChangedText = value;
+						await this.plugin.saveSettings();
+					}));
+		}
+		addExportSettings(containerEl, this.plugin);
 	}
 }

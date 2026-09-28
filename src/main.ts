@@ -4,6 +4,9 @@ import {EditorState, Transaction, Extension} from "@codemirror/state";
 import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab} from "./settings";
 import {DiffView, DIFF_VIEW_TYPE, PendingDiff} from "./DiffView";
 import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent} from "./reviewDraft";
+import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
+import {formatExportFilename} from "./export/filename";
+import {validContextLines} from "./export/unifiedDiff";
 
 interface PersistedData {
 	settings?: Partial<ExternalDiffSettings>;
@@ -38,6 +41,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		await this.loadSettings();
 
 		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings));
+		this.registerView(EXPORT_TEXT_VIEW, leaf => new ExportTextView(leaf));
 
 		// CM6 detection: register updateListener on all editors
 		this.registerEditorExtension(this.createDetectionExtension());
@@ -101,6 +105,9 @@ export default class ExternalDiffPlugin extends Plugin {
 	async loadSettings() {
 		const data: PersistedData = ((await this.loadData()) as PersistedData | null) ?? {};
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings ?? {});
+		try { formatExportFilename(this.settings.exportFilenameTemplate); }
+		catch { this.settings.exportFilenameTemplate = DEFAULT_SETTINGS.exportFilenameTemplate; }
+		if (!validContextLines(this.settings.exportContextLines)) this.settings.exportContextLines = 3;
 		this.restoredDiffs = data.pendingDiffs ?? [];
 	}
 
