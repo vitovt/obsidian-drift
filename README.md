@@ -75,6 +75,7 @@ Exports are saved in the vault root. In **Settings → Drift**, configure:
 
 - **Export filename template** — defaults to `drift-%Y-%m-%d_%H-%M.diff.txt`. Tokens `%Y`, `%m`, `%d`, `%H`, `%M`, and `%S` use local date/time; `%%` produces a literal percent sign. Folder paths are not allowed. Editing the name in the export dialog affects only that export.
 - **Export context lines** — defaults to `3` (`diff -U3` style); accepts non-negative whole numbers.
+- **Readable Unicode paths** — enabled by default. Keeps Ukrainian letters, emoji, and other Unicode characters readable in patch paths. Disable to use octal UTF-8 byte escapes. Paths containing spaces remain quoted; both modes work with Git and GNU patch.
 
 **Open after export** is enabled initially. Markdown opens in a new Obsidian tab, `.txt` opens in a new read-only Drift text tab, and other extensions open through the system's associated application. If opening fails, the saved export remains in the vault.
 
