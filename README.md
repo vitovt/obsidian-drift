@@ -35,6 +35,8 @@ Repeat steps 2–4 after each change. `npm run dev` rebuilds automatically when 
 
 Run `npm run test:review` for draft persistence, history, and conflict checks without launching Obsidian. These tests mock vault operations; interactive scenarios live in `e2e/test/specs/`.
 
+Run `npm run test:export` for export tests. These require Git and GNU patch on your PATH: generated patches are applied to temporary files and their contents compared with the expected results. Vault writes and file-opening routes are tested with mocks.
+
 ## Usage
 
 Once enabled, the plugin runs automatically. When an external tool modifies a markdown file in your vault:
@@ -62,6 +64,34 @@ A shared horizontal scrollbar stays at the bottom of each visible comparison, ou
 Enable **Word-level highlighting** to highlight changed text within lines using CodeMirror's built-in diff algorithm. It is off by default, preserving Drift's line-based patience diff. Switching algorithms can change chunk boundaries and the alignment of repeated lines or moved Markdown sections. Open comparisons rebuild immediately, keeping the draft, selection, and undo history while collapsing unchanged regions. Word wrap works with either algorithm.
 
 With word-level highlighting enabled, turn on **High-contrast word highlighting** to add dark red backgrounds to deleted text and dark green backgrounds to inserted text, both with white lettering. This optional styling applies immediately without rebuilding editors and is off by default.
+
+## Export a review
+
+Select **Export diff** after **Reject all** in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted. Exporting does not accept or reject the reviews.
+
+The dialog shows an editable filename. A green message means the name is available; a red message means the existing file **will be overwritten** when you select **Export**. There is no additional overwrite popup. Drift suggests a free name with a suffix such as `-2`, which you can remove manually.
+
+Exports are saved in the vault root. In **Settings → Drift**, configure:
+
+- **Export filename template** — defaults to `drift-%Y-%m-%d_%H-%M.diff.txt`. Tokens `%Y`, `%m`, `%d`, `%H`, `%M`, and `%S` use local date/time; `%%` produces a literal percent sign. Folder paths are not allowed. Editing the name in the export dialog affects only that export.
+- **Export context lines** — defaults to `3` (`diff -U3` style); accepts non-negative whole numbers.
+
+**Open after export** is enabled initially. Markdown opens in a new Obsidian tab, `.txt` opens in a new read-only Drift text tab, and other extensions open through the system's associated application. If opening fails, the saved export remains in the vault.
+
+The patch starts with metadata and a file list, followed by standard unified hunks using `a/` and `b/` paths relative to the vault root. It preserves CRLF and missing final newlines. It describes the pending text comparisons tracked by Drift, not a complete vault backup or a scan for added/deleted files.
+
+Apply it from the root of a vault containing the **Original** versions (the current externally modified files may already contain some or all of the changes):
+
+```sh
+git apply --check drift-2026-09-28_14-05.diff.txt
+git apply drift-2026-09-28_14-05.diff.txt
+# Alternatively:
+patch -p1 < drift-2026-09-28_14-05.diff.txt
+```
+
+For zero-context exports, add `--unidiff-zero` to both Git commands.
+
+To test in Obsidian, edit a Result draft, collapse another changed file, and export. Check that both appear in the patch. Export again, remove the suggested suffix, verify the red overwrite warning, and save. Check **Open after export** with `.txt`, `.md`, and an extension associated with an external application.
 
 ## Commands
 
