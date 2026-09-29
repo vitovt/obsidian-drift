@@ -10,6 +10,7 @@
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint .",
 		"test:review": "node e2e/test/unit/review-draft.test.mjs",
+		"test:diff": "node e2e/test/unit/word-diff.test.mjs",
 		"test:export": "node --test e2e/test/unit/export-diff.test.mjs e2e/test/unit/export-files.test.mjs"
 	},
 	"keywords": [],

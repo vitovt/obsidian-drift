@@ -11,6 +11,7 @@ import {ReviewControls} from "./reviewControls";
 import type {ReviewSnapshot} from "./reviewDraft";
 import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
+import {wordDiff} from "./wordDiff";
 import {foldUnchangedExtension, computeUnchangedRanges, setFoldRanges, toggleFold} from "./foldUnchanged";
 
 /** Line-based diff using patience algorithm, converted to CodeMirror Change[] with character offsets. */
@@ -298,7 +299,7 @@ export class DiffView extends ItemView {
 			},
 			highlightChanges: true,
 			gutter: false,
-			diffConfig: this.settings.wordLevelHighlighting ? undefined : {override: lineDiff},
+			diffConfig: {override: this.settings.wordLevelHighlighting ? wordDiff : lineDiff},
 		});
 
 		section.scrollbar = this.addChild(new DiffScrollbar(section.mergeContainer,

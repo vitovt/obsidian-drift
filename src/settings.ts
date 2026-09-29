@@ -69,7 +69,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("Word-level highlighting")
-			.setDesc("Highlight changes within lines using the built-in diff algorithm. May change how blocks align; unchanged regions collapse when toggled.")
+			.setDesc("Highlight changed words within line-based change blocks; unchanged regions collapse when toggled.")
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.wordLevelHighlighting)
 				.onChange(async (value) => {
