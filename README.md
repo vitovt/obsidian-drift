@@ -35,6 +35,8 @@ Repeat steps 2–4 after each change. `npm run dev` rebuilds automatically when 
 
 Run `npm run test:review` for draft persistence, history, and conflict checks without launching Obsidian. These tests mock vault operations; interactive scenarios live in `e2e/test/specs/`.
 
+Run `npm run test:diff` for word-level highlighting regressions, including sparse edits across large documents and incremental draft changes.
+
 Run `npm run test:export` for export tests. These require Git and GNU patch on your PATH: generated patches are applied to temporary files and their contents compared with the expected results. Vault writes and file-opening routes are tested with mocks.
 
 ## Usage
@@ -61,7 +63,7 @@ When word wrap is off, horizontal scrolling in either pane automatically scrolls
 
 A shared horizontal scrollbar stays at the bottom of each visible comparison, outside its vertically scrolling text, so long files can be scrolled horizontally without reaching their last line. It is hidden when word wrap is enabled or neither pane overflows.
 
-Enable **Word-level highlighting** to highlight changed text within lines using CodeMirror's built-in diff algorithm. It is off by default, preserving Drift's line-based patience diff. Switching algorithms can change chunk boundaries and the alignment of repeated lines or moved Markdown sections. Open comparisons rebuild immediately, keeping the draft, selection, and undo history while collapsing unchanged regions. Word wrap works with either algorithm.
+Enable **Word-level highlighting** to highlight changed text within lines. Drift first matches unchanged lines with patience diff, then uses CodeMirror's character diff inside each changed block. This keeps distant edits separate in long documents instead of letting a coarse character-diff fallback highlight the whole section. It is off by default. Switching the option can change chunk boundaries; open comparisons rebuild immediately, keeping the draft, selection, and undo history while collapsing unchanged regions. Word wrap works with either mode.
 
 With word-level highlighting enabled, turn on **High-contrast word highlighting** to add dark red backgrounds to deleted text and dark green backgrounds to inserted text, both with white lettering. This optional styling applies immediately without rebuilding editors and is off by default.
 
