@@ -66,21 +66,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.register(() => this.lifecycle.dispose());
 
 		// Baseline housekeeping
-		this.registerEvent(this.app.vault.on("create", async (file) => {
-			if (this.applying.has(file.path)) return;
-			this.refreshMissingReviews();
-			if (file instanceof TFile && file.extension === "md") {
-				const current = await this.app.vault.read(file);
-				const previous = this.pendingDiffs.get(file.path);
-				if (previous) {
-					previous.deleted = false;
-					previous.deletionOnly = false;
-					this.handleExternalChange(file.path, previous.oldContent, current);
-					this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
-				}
-				this.baselines.set(file.path, current);
-			}
-		}));
+		this.registerEvent(this.app.vault.on("create", this.handleCreate));
 		this.registerEvent(this.app.vault.on("delete", file => this.lifecycle.deleted(file)));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
 			if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath);
@@ -311,6 +297,44 @@ export default class ExternalDiffPlugin extends Plugin {
 		}
 		return null;
 	}
+
+	/** Reconcile the returning path without associating it with another filename. */
+	private handleCreate = async (file: TAbstractFile): Promise<void> => {
+		const path = file.path;
+		if (this.applying.has(path)) return;
+		this.refreshMissingReviews();
+		if (!(file instanceof TFile) || file.extension !== "md") return;
+		const previous = this.pendingDiffs.get(path);
+		try {
+			const current = await this.app.vault.read(file);
+			// Ignore a read that finished after another replacement, rename, or review.
+			if (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
+				this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
+			if (previous) {
+				previous.deleted = false;
+				previous.deletionOnly = false;
+				previous.missing = false;
+				previous.recreateMissingFile = false;
+				const edited = previous.draftContent !== previous.newContent;
+				if (!edited && current === previous.oldContent && !previous.originalPath) {
+					// The deletion/content change is undone; no decision remains to apply.
+					this.pendingDiffs.delete(path);
+				} else if (edited || current === previous.newContent) {
+					// Preserve the object and history, including an already edited draft.
+					previous.conflicted = current !== previous.newContent;
+				} else {
+					const diff = this.makeDiffCallbacks(path, previous.oldContent, current);
+					diff.originalPath = previous.originalPath;
+					this.pendingDiffs.set(path, diff);
+				}
+				this.persistState();
+				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
+			}
+			this.baselines.set(path, current);
+		} catch (error) {
+			console.error("Drift: could not read created file", error);
+		}
+	};
 
 	/** Handler for vault.on('modify') — classifies Vault-API writes as internal and catches external changes to files not open in any editor. */
 	private handleModify = async (file: TAbstractFile): Promise<void> => {

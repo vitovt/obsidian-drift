@@ -388,3 +388,84 @@ test('deletion decisions refuse to dismiss a file that reappeared', async () => 
   assert.equal(await diff.onKeepDeletion(), false);
   assert.equal(plugin.pendingDiffs.size, 1); assert.equal(io.writes, 0);
 });
+
+test('external rename round trip clears the returning path without inferring a rename', async () => {
+  const {plugin, files, file, io, lifecycle} = lifecycleSetup();
+  const originalPath = 'Лев віза.md', temporaryPath = 'Лев_віза.md';
+  plugin.pendingDiffs.clear(); plugin.baselines.clear(); files.clear();
+  file.path = originalPath; files.set(originalPath, file);
+  io.disk = 'unchanged contents'; plugin.baselines.set(originalPath, io.disk);
+  const renderedOrders = [];
+  plugin.getExistingDiffView = () => ({syncFiles: reviews => renderedOrders.push([...reviews.keys()]), updateReviewStatus() {}});
+  try {
+    files.delete(originalPath); lifecycle.deleted(file);
+    const temporary = new TFile(temporaryPath); files.set(temporaryPath, temporary);
+    await plugin.handleCreate(temporary);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(plugin.pendingDiffs.get(originalPath).deleted, true);
+    assert.equal(plugin.pendingDiffs.has(temporaryPath), false);
+
+    files.delete(temporaryPath); lifecycle.deleted(temporary);
+    const returning = new TFile(originalPath); files.set(originalPath, returning);
+    await plugin.handleCreate(returning);
+    assert.equal(plugin.pendingDiffs.has(originalPath), false);
+    assert.deepEqual(renderedOrders.at(-1), []);
+    assert.equal(plugin.baselines.get(originalPath), io.disk);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    // Without a confirmed rename event, the other pathname remains a deletion.
+    assert.equal(plugin.pendingDiffs.get(temporaryPath).deleted, true);
+    assert.equal(io.writes, 0);
+  } finally { lifecycle.dispose(); }
+});
+
+test('returning files preserve edited drafts and distinguish unchanged and different contents', async () => {
+  for (const current of ['external', 'another version']) {
+    const {plugin, diff, files, io} = lifecycleSetup();
+    diff.deleted = true; diff.missing = true;
+    diff.onDraftChange('my edited draft');
+    const state = diff.editorState = EditorState.create({doc: diff.draftContent, extensions: [history()]});
+    const returning = new TFile('note.md'); files.set('note.md', returning); io.disk = current;
+    await plugin.handleCreate(returning);
+    assert.equal(plugin.pendingDiffs.get('note.md'), diff);
+    assert.equal(diff.draftContent, 'my edited draft');
+    assert.equal(diff.editorState, state);
+    assert.equal(diff.conflicted, current !== 'external');
+    assert.equal(diff.deleted, false); assert.equal(diff.missing, false);
+    assert.equal(io.writes, 0);
+  }
+});
+
+test('a returning file with changed content becomes a content review', async () => {
+  const {plugin, diff, io, file} = lifecycleSetup();
+  diff.deleted = true; diff.deletionOnly = true; diff.missing = true;
+  io.disk = 'replacement contents';
+  await plugin.handleCreate(file);
+  const updated = plugin.pendingDiffs.get('note.md');
+  assert.equal(updated.oldContent, 'original');
+  assert.equal(updated.draftContent, 'replacement contents');
+  assert.equal(!!updated.deleted, false); assert.equal(!!updated.deletionOnly, false);
+  assert.equal(io.writes, 0);
+});
+
+test('returning original content keeps a confirmed rename review', async () => {
+  const {plugin, diff, rename, io, file} = lifecycleSetup();
+  rename('new.md'); diff.deleted = true; diff.missing = true;
+  io.disk = diff.oldContent;
+  await plugin.handleCreate(file);
+  const updated = plugin.pendingDiffs.get('new.md');
+  assert.equal(updated.originalPath, 'note.md');
+  assert.equal(updated.newContent, updated.oldContent);
+  assert.equal(io.writes, 0);
+});
+
+test('stale create-event reads cannot resolve a replacement file review', async () => {
+  const {plugin, files, file, diff, io} = lifecycleSetup();
+  let finishRead;
+  plugin.app.vault.read = () => new Promise(resolve => { finishRead = resolve; });
+  const pending = plugin.handleCreate(file);
+  files.set(file.path, new TFile(file.path));
+  finishRead('original'); await pending;
+  assert.equal(plugin.pendingDiffs.get(file.path), diff);
+  assert.equal(plugin.baselines.get(file.path), 'original');
+  assert.equal(io.writes, 0);
+});
