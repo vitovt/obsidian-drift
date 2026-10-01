@@ -5,6 +5,8 @@ import {addExportSettings} from "./export/settings";
 
 export interface ExternalDiffSettings {
 	enabled: boolean;
+	trackFileRenames: boolean;
+	trackFileDeletions: boolean;
 	ignoreEmptyFileChanges: boolean;
 	focusDiffOnChange: boolean;
 	wordWrap: boolean;
@@ -17,6 +19,8 @@ export interface ExternalDiffSettings {
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
+	trackFileRenames: false,
+	trackFileDeletions: false,
 	ignoreEmptyFileChanges: false,
 	focusDiffOnChange: false,
 	wordWrap: false,
@@ -48,6 +52,17 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					this.plugin.settings.enabled = value;
 					await this.plugin.saveSettings();
 				}));
+
+		for (const [key, name, description] of [
+			["trackFileRenames", "Track file renames (experimental)", "Follow confirmed Obsidian rename events. Delete and create events are never matched. Folder renames update existing reviews only."],
+			["trackFileDeletions", "Track file deletions (experimental)", "Review deletions while Drift is running, including deletions in Obsidian. Restore files from their last known versions."],
+		] as const) {
+			new Setting(containerEl).setName(name).setDesc(description)
+				.addToggle(toggle => toggle.setValue(this.plugin.settings[key]).onChange(async value => {
+					this.plugin.settings[key] = value;
+					await this.plugin.saveSettings();
+				}));
+		}
 
 		new Setting(containerEl)
 			.setName("Ignore changes to empty files")

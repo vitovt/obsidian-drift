@@ -1,6 +1,19 @@
 import type {TFile, Vault} from "obsidian";
 
-export interface ReviewSnapshot {
+export interface LifecycleState {
+	path?: string;
+	originalPath?: string;
+	deleted?: boolean;
+	/** A deletion review that did not replace an existing content review. */
+	deletionOnly?: boolean;
+	restoreOriginalPath?: boolean;
+}
+
+export function renameOnly(diff: ReviewSnapshot): boolean {
+	return !!diff.originalPath && !diff.deleted && diff.oldContent === diff.newContent && diff.draftContent === diff.newContent;
+}
+
+export interface ReviewSnapshot extends LifecycleState {
 	oldContent: string;
 	/** The disk version against which this draft was reviewed. */
 	newContent: string;
@@ -8,7 +21,7 @@ export interface ReviewSnapshot {
 	conflicted: boolean;
 }
 
-export interface PersistedDiffEntry {
+export interface PersistedDiffEntry extends LifecycleState {
 	path: string;
 	oldContent: string;
 	newContent: string;
