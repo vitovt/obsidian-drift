@@ -44,7 +44,7 @@ Run `npm run test:export` for export tests. These require Git and GNU patch on y
 Once enabled, the plugin runs automatically. When an external tool modifies a markdown file in your vault:
 
 1. A **Drift** tab opens in the background showing the side-by-side diff
-2. Compare **Original** on the left with **Result · Editable** on the right
+2. Compare **Original** on the left with **Result (Editable)** on the right
 3. Edit the result or select **Restore original block** (`→`) to copy a block from left to right. These actions change the draft only; the file stays untouched until **Accept**. Use **Undo** / **Redo**, or `Ctrl+Z` / `Ctrl+Shift+Z` (`Cmd` on macOS), to revise your decisions
 4. Use the **Open diff viewer** command to reopen the tab if you close it
 5. Select **Accept** to save the result, or **Reject** to restore the original. **Accept all** and **Reject all** apply the corresponding action to each pending file
@@ -54,6 +54,12 @@ Restoring every block keeps the review open so you can undo or explicitly accept
 If the file changes again while you have an edited draft, Drift keeps the draft and shows **Review latest changes**. Selecting it puts the latest disk version on the left and your draft on the right without writing anything. Review the differences before accepting; **Reject** now keeps that latest comparison baseline. Both Accept and Reject check the disk version before writing, and failed or conflicting files remain open even during bulk actions.
 
 The toolbar centers **Accept all** and **Reject all**, separate from the right-aligned per-file actions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
+
+Expanded comparisons are indented beneath their file headers. Long file paths wrap when expanded; hover over a path to read it in full, including when the section is collapsed.
+
+If a reviewed file disappears from its original path, Drift displays **Original — file missing**. It does not follow renamed files. Enable **Recreate missing file** in that review to let **Accept** create the Result or **Reject** create the Original at the old path. The checkbox is off by default and also controls whether bulk actions can recreate that file. Recreation requires the original parent folder to exist and never overwrites an occupied path. If the file reappears, the checkbox resets and normal content-conflict checks apply. Reloading Drift or restarting Obsidian drops reviews whose paths are still missing, including their drafts; copy useful draft text or export the diff first.
+
+Enable **Ignore changes to empty files** in plugin settings to treat the first content written to an empty file as its baseline. This is useful for external apps that create an empty file before filling it. The option is off by default, applies only to files with no existing pending review, and treats only zero-character content as empty (not whitespace). Subsequent edits are reviewed normally.
 
 In **Settings → Drift**, enable **Focus diff tab on external change** to switch to the diff tab automatically whenever an external change is detected. This is off by default, so changes open in the background unless you opt in.
 
