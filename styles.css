@@ -331,3 +331,8 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	overflow-wrap: anywhere;
 	text-align: start;
 }
+
+.diff-view-renamed {
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}

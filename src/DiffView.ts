@@ -1,4 +1,4 @@
-import {Notice, ItemView, setTooltip, WorkspaceLeaf} from "obsidian";
+import {App, Modal, Setting, Notice, ItemView, setTooltip, WorkspaceLeaf} from "obsidian";
 import {Change, MergeView} from "@codemirror/merge";
 import {drawSelection, EditorView, keymap, lineNumbers} from "@codemirror/view";
 import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/commands";
@@ -8,7 +8,7 @@ import {DiffToolbar} from "./diffToolbar";
 import {ExportModal} from "./export/ExportModal";
 import {DiffScrollbar} from "./diffScrollbar";
 import {ReviewControls} from "./reviewControls";
-import type {ReviewSnapshot} from "./reviewDraft";
+import {renameOnly, type ReviewSnapshot} from "./reviewDraft";
 import {createHorizontalScrollSync, synchronizedScroll} from "./syncScroll";
 import {patienceDiff} from "./patienceDiff";
 import {wordDiff} from "./wordDiff";
@@ -59,6 +59,7 @@ export interface PendingDiff extends ReviewSnapshot {
 	editorState?: EditorState;
 	onAccept: (content: string) => Promise<boolean>;
 	onReject: () => Promise<boolean>;
+	onKeepDeletion: () => Promise<boolean>;
 	onDraftChange: (content: string) => void;
 	onReviewLatest: () => Promise<void>;
 }
@@ -66,11 +67,13 @@ export interface PendingDiff extends ReviewSnapshot {
 interface FileSection {
 	diff: PendingDiff;
 	expanded: boolean;
+	displaysDeletion?: boolean;
 	mergeView: MergeView | null;
 	mergeContainer: HTMLElement | null;
 	chevron?: HTMLElement;
 	header?: HTMLElement;
 	acceptButton?: HTMLButtonElement;
+	rejectButton?: HTMLButtonElement;
 	scrollbar?: DiffScrollbar;
 	reviewControls?: ReviewControls;
 }
@@ -139,10 +142,24 @@ export class DiffView extends ItemView {
 		this.render();
 	}
 
+	syncFiles(diffs: Map<string, PendingDiff>): void {
+		const old = [...this.sections.values()];
+		this.sections.clear();
+		for (const [path, diff] of diffs) {
+			const previous = old.find(section => section.diff === diff);
+			this.sections.set(path, previous ?? {diff, expanded: true, mergeView: null, mergeContainer: null});
+		}
+		for (const section of old) if (![...this.sections.values()].includes(section)) this.destroyMergeView(section);
+		this.render();
+	}
+
 	updateReviewStatus(path: string): void {
 		const section = this.sections.get(path);
-		if (section?.acceptButton) section.acceptButton.setText(section.diff.draftContent !== section.diff.newContent ? "Save result" : "Accept");
-		if (section) section.reviewControls?.update(section.diff.conflicted, section.diff.missing, section.diff.recreateMissingFile);
+		if (!section) return;
+		const diff = section.diff;
+		section.acceptButton?.setText(diff.deleted ? "Keep deletion" : renameOnly(diff) ? "Keep rename" : diff.draftContent !== diff.newContent ? "Save result" : "Accept");
+		section.rejectButton?.setText(diff.deleted ? diff.deletionOnly ? "Restore file" : "Restore original" : renameOnly(diff) ? "Restore original path" : "Reject");
+		section.reviewControls?.update(diff.conflicted, diff.missing, diff.recreateMissingFile, diff.deleted);
 	}
 
 	async onOpen(): Promise<void> {}
@@ -156,7 +173,7 @@ export class DiffView extends ItemView {
 	}
 
 	private updateExportAvailability(): void {
-		this.toolbar?.setExportEnabled(Array.from(this.sections.values()).some(({diff}) => diff.oldContent !== diff.draftContent));
+		this.toolbar?.setExportEnabled(Array.from(this.sections.values()).some(({diff}) => diff.oldContent !== diff.draftContent || !!diff.deleted || !!diff.originalPath));
 	}
 
 	private render(): void {
@@ -183,8 +200,9 @@ export class DiffView extends ItemView {
 				for (const [path, section] of this.sections) this.setExpanded(path, section, value);
 			}, () => { void this.handleAcceptAll(); }, () => { void this.handleRejectAll(); }, () => {
 				const entries = Array.from(this.sections, ([path, {diff}]) => ({
-					path, oldContent: diff.oldContent, draftContent: diff.draftContent, conflicted: diff.conflicted,
-				})).filter(entry => entry.oldContent !== entry.draftContent);
+					path, oldContent: diff.oldContent, draftContent: diff.deleted ? "" : diff.draftContent, conflicted: diff.conflicted,
+					originalPath: diff.originalPath, deleted: diff.deleted,
+				})).filter(entry => entry.oldContent !== entry.draftContent || entry.deleted || entry.originalPath);
 				new ExportModal(this.app, entries, this.settings.exportFilenameTemplate, this.settings.exportContextLines, this.settings.exportUnicodePaths).open();
 			}));
 		this.updateExportAvailability();
@@ -211,6 +229,12 @@ export class DiffView extends ItemView {
 			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
 
 			section.acceptButton = acceptBtn;
+			section.rejectButton = rejectBtn;
+			if (section.diff.deleted && !section.diff.deletionOnly) {
+				const save = actions.createEl("button", {text: "Save result"});
+				save.addEventListener("click", () => { void this.handleAccept(path, true); });
+			}
+			this.updateReviewStatus(path);
 			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleAccept(path); });
 			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleReject(path); });
 
@@ -232,7 +256,7 @@ export class DiffView extends ItemView {
 	}
 
 	private destroyMergeView(section: FileSection): void {
-		if (section.mergeView) section.diff.editorState = section.mergeView.b.state;
+		if (section.mergeView && !section.displaysDeletion) section.diff.editorState = section.mergeView.b.state;
 		if (section.reviewControls) this.removeChild(section.reviewControls);
 		section.reviewControls = undefined;
 		if (section.scrollbar) this.removeChild(section.scrollbar);
@@ -246,11 +270,21 @@ export class DiffView extends ItemView {
 		this.destroyMergeView(section);
 		if (!section.mergeContainer) return;
 		section.mergeContainer.empty();
+		section.displaysDeletion = !!(section.diff.deleted && section.diff.deletionOnly);
 		section.reviewControls = this.addChild(new ReviewControls(section.mergeContainer,
 			() => section.mergeView?.b, section.diff.onReviewLatest, value => {
 				section.diff.recreateMissingFile = value;
 				this.updateReviewStatus(path);
 			}));
+		if (section.diff.originalPath) {
+			section.reviewControls.setRename(section.diff.originalPath, !!section.diff.restoreOriginalPath,
+				value => { section.diff.restoreOriginalPath = value; }, !renameOnly(section.diff));
+		}
+		if (renameOnly(section.diff)) {
+			section.mergeContainer.createDiv({text: "No content changes.", cls: "diff-view-review-status"});
+			this.updateReviewStatus(path);
+			return;
+		}
 		const syncScroll = createHorizontalScrollSync();
 		const syncScrollEnabled = () => !this.settings.wordWrap;
 
@@ -275,17 +309,19 @@ export class DiffView extends ItemView {
 				],
 			},
 			b: {
-				doc: section.diff.draftContent,
-				selection: section.diff.editorState?.selection,
+				doc: section.diff.deletionOnly && section.diff.deleted ? "" : section.diff.draftContent,
+				selection: section.diff.deletionOnly && section.diff.deleted ? undefined : section.diff.editorState?.selection,
 				extensions: [
 					history(),
+					EditorView.editable.of(!(section.diff.deleted && section.diff.deletionOnly)),
+					EditorState.readOnly.of(!!(section.diff.deleted && section.diff.deletionOnly)),
 					EditorState.transactionFilter.of(tr => this.applying.has(path) && tr.docChanged ? [] : tr),
-					...(section.diff.editorState ? [historyField.init(() => section.diff.editorState!.field(historyField))] : []),
+					...(section.diff.editorState && !(section.diff.deleted && section.diff.deletionOnly) ? [historyField.init(() => section.diff.editorState!.field(historyField))] : []),
 					keymap.of([...historyKeymap, ...defaultKeymap]),
 					drawSelection(),
 					EditorView.contentAttributes.of({"aria-label": "Result, editable draft"}),
 					EditorView.updateListener.of(update => {
-						section.diff.editorState = update.state;
+						if (!section.displaysDeletion) section.diff.editorState = update.state;
 						if (update.docChanged) {
 							section.diff.onDraftChange(update.state.doc.toString());
 							this.updateExportAvailability();
@@ -300,7 +336,7 @@ export class DiffView extends ItemView {
 				],
 			},
 			parent: section.mergeContainer,
-			revertControls: "a-to-b",
+			revertControls: section.diff.deleted && section.diff.deletionOnly ? undefined : "a-to-b",
 			renderRevertControl: () => {
 				const btn = createEl("button");
 				btn.className = "diff-view-revert-btn";
@@ -327,9 +363,17 @@ export class DiffView extends ItemView {
 	}
 
 	/** Accept current state of editor B (includes any partial chunk reverts). */
-	private async handleAccept(path: string): Promise<void> {
+	private async handleAccept(path: string, saveResult = false): Promise<void> {
 		const section = this.sections.get(path);
 		if (!section || this.applying.has(path)) return;
+		if (section.diff.deleted && !saveResult) {
+			if (section.diff.draftContent !== section.diff.newContent) {
+				new DiscardDraftModal(this.app, () => { void this.keepDeletion(path, section); }).open();
+				return;
+			}
+			await this.keepDeletion(path, section);
+			return;
+		}
 		const content = section.mergeView
 			? section.mergeView.b.state.doc.toString()
 			: section.diff.draftContent;
@@ -339,6 +383,10 @@ export class DiffView extends ItemView {
 		} finally {
 			this.applying.delete(path);
 		}
+	}
+
+	private async keepDeletion(path: string, section: FileSection): Promise<void> {
+		if (await section.diff.onKeepDeletion() && this.sections.get(path) === section) this.removeFile(path);
 	}
 
 	/** Reject changes for a file. */
@@ -378,5 +426,16 @@ export class DiffView extends ItemView {
 		} else {
 			this.render();
 		}
+	}
+}
+
+class DiscardDraftModal extends Modal {
+	constructor(app: App, private discard: () => void) { super(app); }
+	onOpen(): void {
+		this.titleEl.setText("Discard edited draft?");
+		this.contentEl.createEl("p", {text: "Keeping the deletion discards your edited result. The file will remain deleted."});
+		new Setting(this.contentEl)
+			.addButton(button => button.setButtonText("Cancel").onClick(() => this.close()))
+			.addButton(button => button.setButtonText("Keep deletion").setWarning().onClick(() => { this.close(); this.discard(); }));
 	}
 }

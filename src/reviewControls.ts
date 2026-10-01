@@ -4,6 +4,9 @@ import type {EditorView} from "@codemirror/view";
 
 /** Labels and draft actions, kept outside the scrolling editor content. */
 export class ReviewControls extends Component {
+	private original: HTMLElement;
+	private result: HTMLElement;
+	private resultLabel: HTMLElement;
 	private undoButton: HTMLButtonElement;
 	private redoButton: HTMLButtonElement;
 	private status: HTMLElement;
@@ -18,11 +21,13 @@ export class ReviewControls extends Component {
 		super();
 		const labels = container.createDiv({cls: "diff-view-review-labels"});
 		const original = labels.createDiv({cls: "diff-view-original-label"});
+		this.original = original;
 		original.createSpan({text: "Original"});
 		this.missingLabel = original.createSpan({text: "— file missing", cls: "diff-view-file-missing"});
 		setTooltip(this.missingLabel, "The file may have been deleted, moved, or renamed.");
 		const result = labels.createDiv({cls: "diff-view-result-label"});
-		result.createSpan({text: "Result (Editable)"});
+		this.result = result;
+		this.resultLabel = result.createSpan({text: "Result (Editable)"});
 		this.recreateLabel = result.createEl("label", {cls: "diff-view-recreate"});
 		this.recreateCheckbox = this.recreateLabel.createEl("input", {type: "checkbox"});
 		this.recreateLabel.createSpan({text: "Recreate missing file"});
@@ -49,9 +54,25 @@ export class ReviewControls extends Component {
 		this.registerDomEvent(this.latestButton, "click", () => { void reviewLatest(); });
 	}
 
-	update(conflicted: boolean, missing = false, recreate = false): void {
+	setRename(path: string, checked: boolean, change: (value: boolean) => void, showCheckbox: boolean): void {
+		const icon = this.original.createSpan({cls: "diff-view-rename-icon"});
+		setIcon(icon, "arrow-right-left");
+		const label = this.original.createSpan({text: `Renamed from: ${path}`, cls: "diff-view-renamed"});
+		setTooltip(label, path);
+		if (!showCheckbox) return;
+		const restore = this.result.createEl("label", {cls: "diff-view-recreate"});
+		const checkbox = restore.createEl("input", {type: "checkbox"});
+		checkbox.checked = checked;
+		restore.createSpan({text: "Restore original path"});
+		setTooltip(restore, "Restore the original path when applying this review.");
+		this.registerDomEvent(checkbox, "change", () => change(checkbox.checked));
+	}
+
+	update(conflicted: boolean, missing = false, recreate = false, deleted = false): void {
 		this.missingLabel.toggle(missing);
-		this.recreateLabel.toggle(missing);
+		this.recreateLabel.toggle(missing && !deleted);
+		this.missingLabel.setText(deleted ? "— file deleted" : "— file missing");
+		this.resultLabel.setText(deleted && !this.getEditor()?.state.doc.length ? "File deleted" : "Result (Editable)");
 		this.recreateCheckbox.checked = recreate;
 		const editor = this.getEditor();
 		this.undoButton.disabled = !editor || undoDepth(editor.state) === 0;
@@ -59,7 +80,7 @@ export class ReviewControls extends Component {
 		this.latestButton.toggle(conflicted && !missing);
 		this.statusRow.toggle(missing || conflicted);
 		this.status.setText(missing
-			? "File missing. Enable recreation to save at the original path."
+			? deleted ? "Keep the deletion or explicitly restore a saved version." : "File missing. Enable recreation to save at the original path."
 			: conflicted
 			? "File changed again. Review the latest version before applying your draft."
 			: "");
