@@ -7,6 +7,7 @@ export class ReviewControls extends Component {
 	private undoButton: HTMLButtonElement;
 	private redoButton: HTMLButtonElement;
 	private status: HTMLElement;
+	private statusRow: HTMLElement;
 	private latestButton: HTMLButtonElement;
 	private missingLabel: HTMLElement;
 	private recreateLabel: HTMLElement;
@@ -42,9 +43,9 @@ export class ReviewControls extends Component {
 				editor.focus();
 			});
 		}
-		const statusRow = container.createDiv({cls: "diff-view-review-status"});
-		this.status = statusRow.createSpan({attr: {"aria-live": "polite"}});
-		this.latestButton = statusRow.createEl("button", {text: "Review latest changes"});
+		this.statusRow = container.createDiv({cls: "diff-view-review-status"});
+		this.status = this.statusRow.createSpan({attr: {"aria-live": "polite"}});
+		this.latestButton = this.statusRow.createEl("button", {text: "Review latest changes"});
 		this.registerDomEvent(this.latestButton, "click", () => { void reviewLatest(); });
 	}
 
@@ -56,10 +57,11 @@ export class ReviewControls extends Component {
 		this.undoButton.disabled = !editor || undoDepth(editor.state) === 0;
 		this.redoButton.disabled = !editor || redoDepth(editor.state) === 0;
 		this.latestButton.toggle(conflicted && !missing);
+		this.statusRow.toggle(missing || conflicted);
 		this.status.setText(missing
 			? "File missing. Enable recreation to save at the original path."
 			: conflicted
 			? "File changed again. Review the latest version before applying your draft."
-			: "Draft only. Select Accept to save the result.");
+			: "");
 	}
 }
