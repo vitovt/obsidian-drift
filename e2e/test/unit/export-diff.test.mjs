@@ -68,6 +68,19 @@ test('metadata is deterministic and unchanged entries are omitted', () => {
   assert.throws(() => createUnifiedExport([{path: '../x', oldContent: 'a', draftContent: 'b'}]));
 });
 
+test('header and patch preserve supplied viewer order while omitting unchanged entries', () => {
+  const entries = ['z.md', 'unchanged.md', 'a.md'].map(path => ({
+    path, oldContent: 'old\n', draftContent: path === 'unchanged.md' ? 'old\n' : 'new\n',
+  }));
+  for (const ordered of [entries, [...entries].reverse()]) {
+    const patch = createUnifiedExport(ordered);
+    const expected = ordered.filter(e => e.oldContent !== e.draftContent).map(e => e.path);
+    assert.deepEqual([...patch.matchAll(/^  "([^"]+)"$/gm)].map(m => m[1]), expected);
+    assert.deepEqual([...patch.matchAll(/^diff --git a\/(\S+) b\/\S+$/gm)].map(m => m[1]), expected);
+    assert.deepEqual(entries.map(e => e.path), ['z.md', 'unchanged.md', 'a.md']);
+  }
+});
+
 test('filename templates use local time and reject invalid names or tokens', () => {
   const date = new Date(2026, 8, 28, 14, 5, 9);
   assert.equal(formatExportFilename(DEFAULT_EXPORT_TEMPLATE, date), 'drift-2026-09-28_14-05.diff.txt');

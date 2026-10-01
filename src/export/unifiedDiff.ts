@@ -74,8 +74,8 @@ function filePatch(entry: ExportEntry, context: number, unicodePaths: boolean): 
 /** Export a frozen Original -> Result snapshot, independent of viewer folding. */
 export function createUnifiedExport(entries: readonly ExportEntry[], context = 3, date = new Date(), unicodePaths = true): string {
 	if (!validContextLines(context)) throw new Error("Context lines must be a non-negative integer.");
-	const changed = entries.filter(entry => entry.oldContent !== entry.draftContent)
-		.sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+	// The caller supplies viewer order, including any future viewer sorting.
+	const changed = entries.filter(entry => entry.oldContent !== entry.draftContent);
 	if (changed.length === 0) return "";
 	const header = [
 		"Drift diff export",
