@@ -52,14 +52,17 @@ export default class ExternalDiffPlugin extends Plugin {
 
 		// Baseline housekeeping
 		this.registerEvent(this.app.vault.on("create", async (file) => {
+			this.refreshMissingReviews();
 			if (file instanceof TFile && file.extension === "md") {
 				this.baselines.set(file.path, await this.app.vault.read(file));
 			}
 		}));
 		this.registerEvent(this.app.vault.on("delete", (file) => {
 			if (file instanceof TFile) this.baselines.delete(file.path);
+			this.refreshMissingReviews();
 		}));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+			this.refreshMissingReviews();
 			if (file instanceof TFile) {
 				const content = this.baselines.get(oldPath);
 				if (content !== undefined) {
@@ -419,24 +422,41 @@ export default class ExternalDiffPlugin extends Plugin {
 		return diff;
 	}
 
+	/** Check old paths without inferring or following renames. */
+	private refreshMissingReviews(): void {
+		for (const [path, diff] of this.pendingDiffs) {
+			const missing = !(this.app.vault.getAbstractFileByPath(path) instanceof TFile);
+			if (missing !== !!diff.missing) diff.recreateMissingFile = false;
+			diff.missing = missing;
+			this.getExistingDiffView()?.updateReviewStatus(path);
+		}
+	}
+
 	/** Apply only to the version reviewed, leaving failed/conflicting drafts open. */
 	private async completeReview(path: string, diff: PendingDiff, content: string): Promise<boolean> {
 		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return false;
-		if (diff.conflicted) {
-			new Notice("Review the latest file changes before applying this draft.");
+		this.refreshMissingReviews();
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (diff.missing && !diff.recreateMissingFile) {
+			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Names the exact recovery controls.
+			new Notice("File missing at the original path. Enable 'Recreate missing file', then Accept to save the result or Reject to restore the original. Reloading Drift removes this review and discards its draft.", 12000);
 			return false;
 		}
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) {
-			new Notice("The file is no longer available. Your review has not been applied.");
+		if (diff.conflicted && !diff.missing) {
+			new Notice("Review the latest file changes before applying this draft.");
 			return false;
 		}
 		this.applying.add(path);
 		try {
-			await writeReviewedContent(this.app.vault, file, diff.newContent, content, () => {
-				if (this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
-				this.selfModifyPaths.add(path);
-			});
+			if (!(file instanceof TFile)) {
+				// create refuses an occupied path, including files arriving during sync.
+				await this.app.vault.create(path, content);
+			} else {
+				await writeReviewedContent(this.app.vault, file, diff.newContent, content, () => {
+					if (this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
+					this.selfModifyPaths.add(path);
+				});
+			}
 			if (this.pendingDiffs.get(path) === diff) this.pendingDiffs.delete(path);
 			this.baselines.set(path, content);
 			this.persistState();

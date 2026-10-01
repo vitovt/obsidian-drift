@@ -55,6 +55,53 @@ function setup(disk = 'external') {
   return {plugin, file, io, diff};
 }
 
+test('missing files require explicit recreation for both accept and reject', async () => {
+  for (const accept of [true, false]) {
+    const {plugin, diff, io, file} = setup();
+    plugin.app.vault.getAbstractFileByPath = () => null;
+    let created;
+    plugin.app.vault.create = async (path, content) => { created = {path, content}; return file; };
+    diff.onDraftChange('edited draft');
+    const apply = () => accept ? diff.onAccept(diff.draftContent) : diff.onReject();
+    assert.equal(await apply(), false);
+    assert.equal(diff.missing, true);
+    assert.equal(created, undefined);
+    assert.equal(plugin.pendingDiffs.size, 1);
+    diff.recreateMissingFile = true;
+    assert.equal(await apply(), true);
+    assert.deepEqual(created, {path: 'note.md', content: accept ? 'edited draft' : 'original'});
+    assert.equal(plugin.pendingDiffs.size, 0);
+    assert.equal(io.writes, 0);
+  }
+});
+
+test('a reappearing file resets recreation permission and checks its content', async () => {
+  const {plugin, diff, file, io} = setup();
+  plugin.app.vault.getAbstractFileByPath = () => null;
+  plugin.refreshMissingReviews();
+  diff.recreateMissingFile = true;
+  plugin.app.vault.getAbstractFileByPath = () => file;
+  io.disk = 'new Dropbox contents';
+  assert.equal(await diff.onReject(), false);
+  assert.equal(diff.recreateMissingFile, false);
+  assert.equal(diff.conflicted, true);
+  assert.equal(io.writes, 0);
+});
+
+test('failed recreation preserves the review and never falls back to overwriting', async () => {
+  const {plugin, diff, io} = setup();
+  plugin.app.vault.getAbstractFileByPath = () => null;
+  plugin.refreshMissingReviews();
+  diff.recreateMissingFile = true;
+  plugin.app.vault.create = async () => { throw new Error('File already exists'); };
+  const originalError = console.error;
+  console.error = () => {};
+  try { assert.equal(await diff.onAccept('draft'), false); }
+  finally { console.error = originalError; }
+  assert.equal(plugin.pendingDiffs.size, 1);
+  assert.equal(io.writes, 0);
+});
+
 test('restores legacy entries and discards resolved reviews', () => {
   assert.equal(restoreReview({oldContent:'a', newContent:'b'}, 'a'), null);
   assert.deepEqual(restoreReview({oldContent:'a', newContent:'b'}, 'c'),

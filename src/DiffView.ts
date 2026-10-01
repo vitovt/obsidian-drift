@@ -53,6 +53,8 @@ function lineDiff(a: string, b: string): readonly Change[] {
 export const DIFF_VIEW_TYPE = "external-diff-view";
 
 export interface PendingDiff extends ReviewSnapshot {
+	missing?: boolean;
+	recreateMissingFile?: boolean;
 	/** Session-only history and selection; only the draft text is persisted. */
 	editorState?: EditorState;
 	onAccept: (content: string) => Promise<boolean>;
@@ -137,7 +139,7 @@ export class DiffView extends ItemView {
 
 	updateReviewStatus(path: string): void {
 		const section = this.sections.get(path);
-		if (section) section.reviewControls?.update(section.diff.conflicted);
+		if (section) section.reviewControls?.update(section.diff.conflicted, section.diff.missing, section.diff.recreateMissingFile);
 	}
 
 	async onOpen(): Promise<void> {}
@@ -238,7 +240,10 @@ export class DiffView extends ItemView {
 		if (!section.mergeContainer) return;
 		section.mergeContainer.empty();
 		section.reviewControls = this.addChild(new ReviewControls(section.mergeContainer,
-			() => section.mergeView?.b, section.diff.onReviewLatest));
+			() => section.mergeView?.b, section.diff.onReviewLatest, value => {
+				section.diff.recreateMissingFile = value;
+				this.updateReviewStatus(path);
+			}));
 		const syncScroll = createHorizontalScrollSync();
 		const syncScrollEnabled = () => !this.settings.wordWrap;
 
@@ -278,7 +283,7 @@ export class DiffView extends ItemView {
 							section.diff.onDraftChange(update.state.doc.toString());
 							this.updateExportAvailability();
 						}
-						section.reviewControls?.update(section.diff.conflicted);
+						this.updateReviewStatus(path);
 					}),
 					...foldUnchangedExtension(syncB),
 					synchronizedScroll(syncScroll, () => section.mergeView?.a, syncScrollEnabled, () => section.scrollbar?.dom),
@@ -311,7 +316,7 @@ export class DiffView extends ItemView {
 		const rangesB = computeUnchangedRanges(section.mergeView.b.state.doc, chunks, "b", 2, 4);
 		section.mergeView.a.dispatch({effects: setFoldRanges.of(rangesA)});
 		section.mergeView.b.dispatch({effects: setFoldRanges.of(rangesB)});
-		section.reviewControls.update(section.diff.conflicted);
+		this.updateReviewStatus(path);
 	}
 
 	/** Accept current state of editor B (includes any partial chunk reverts). */
