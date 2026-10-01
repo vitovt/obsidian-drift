@@ -22,7 +22,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -31,7 +31,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {Plugin, TFile, FileLifecycle, DiffView, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -468,4 +468,39 @@ test('stale create-event reads cannot resolve a replacement file review', async 
   assert.equal(plugin.pendingDiffs.get(file.path), diff);
   assert.equal(plugin.baselines.get(file.path), 'original');
   assert.equal(io.writes, 0);
+});
+
+
+test('internal operation markers cover folder children, failures, and cleanup', async () => {
+  let observer;
+  const vault = {
+    delete: async file => { assert.equal(observer.isInternal(file.path + '/child.md'), true); throw new Error('failed'); },
+    trash: async file => vault.delete(file), rename: async () => {}, create: async () => {},
+  };
+  const original = vault.delete;
+  observer = new InternalOperations(vault);
+  await assert.rejects(vault.trash({path: 'folder'}), /failed/);
+  assert.equal(observer.isInternal('folder/child.md'), false);
+  observer.dispose(); assert.equal(vault.delete, original);
+});
+
+test('internal renames follow existing reviews but create none by default', () => {
+  const {plugin, lifecycle, files, file, diff} = lifecycleSetup();
+  files.delete('note.md'); file.path = 'renamed.md'; files.set(file.path, file);
+  lifecycle.rename(file, 'note.md', true);
+  assert.equal(plugin.pendingDiffs.get('renamed.md'), diff);
+  plugin.pendingDiffs.clear();
+  file.path = 'again.md'; lifecycle.rename(file, 'renamed.md', true);
+  assert.equal(plugin.pendingDiffs.size, 0);
+});
+
+test('internal deletions are opt-in while external deletions remain tracked', async () => {
+  for (const trackInAppChanges of [false, true]) {
+    const {plugin, lifecycle, files, file} = lifecycleSetup();
+    plugin.settings.trackInAppChanges = trackInAppChanges;
+    plugin.pendingDiffs.clear(); files.clear(); lifecycle.deleted(file, true);
+    await new Promise(resolve => setTimeout(resolve, 550));
+    assert.equal(plugin.pendingDiffs.size, trackInAppChanges ? 1 : 0);
+    lifecycle.dispose();
+  }
 });

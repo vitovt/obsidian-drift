@@ -5,6 +5,7 @@ import {addExportSettings} from "./export/settings";
 
 export interface ExternalDiffSettings {
 	enabled: boolean;
+	trackInAppChanges: boolean;
 	trackFileRenames: boolean;
 	trackFileDeletions: boolean;
 	ignoreEmptyFileChanges: boolean;
@@ -19,6 +20,7 @@ export interface ExternalDiffSettings {
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
+	trackInAppChanges: false,
 	trackFileRenames: false,
 	trackFileDeletions: false,
 	ignoreEmptyFileChanges: false,
@@ -54,6 +56,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				}));
 
 		for (const [key, name, description] of [
+			["trackInAppChanges", "Track in-app changes", "Include edits, renames, and deletions made through Obsidian and plugin file APIs. Existing reviews always follow confirmed moves."],
 			["trackFileRenames", "Track file renames (experimental)", "Follow confirmed Obsidian rename events. Delete and create events are never matched. Folder renames update existing reviews only."],
 			["trackFileDeletions", "Track file deletions (experimental)", "Review deletions while Drift is running, including deletions in Obsidian. Restore files from their last known versions."],
 		] as const) {

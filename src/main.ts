@@ -7,6 +7,7 @@ import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedCon
 import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
 import {formatExportFilename} from "./export/filename";
 import {validContextLines} from "./export/unifiedDiff";
+import {InternalOperations} from "./internalOperations";
 import {FileLifecycle} from "./fileLifecycle";
 
 interface PersistedData {
@@ -38,6 +39,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private saveTimer: ReturnType<typeof activeWindow.setTimeout> | null = null;
 	private applying = new Set<string>();
 	private lifecycle: FileLifecycle;
+	private internalOperations: InternalOperations;
 	private restoringPath: string | null = null;
 
 	async onload() {
@@ -65,11 +67,14 @@ export default class ExternalDiffPlugin extends Plugin {
 		});
 		this.register(() => this.lifecycle.dispose());
 
+		this.internalOperations = new InternalOperations(this.app.vault);
+		this.register(() => this.internalOperations.dispose());
+
 		// Baseline housekeeping
 		this.registerEvent(this.app.vault.on("create", this.handleCreate));
-		this.registerEvent(this.app.vault.on("delete", file => this.lifecycle.deleted(file)));
+		this.registerEvent(this.app.vault.on("delete", file => this.lifecycle.deleted(file, this.internalOperations.isInternal(file.path))));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-			if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath);
+			if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath, this.internalOperations.isInternal(oldPath));
 		}));
 
 		this.addCommand({
@@ -270,6 +275,10 @@ export default class ExternalDiffPlugin extends Plugin {
 						this.handleExternalChange(path, oldContent, newContent);
 					}
 				} else {
+					if (this.settings.trackInAppChanges) {
+						const previous = this.baselines.get(path);
+						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString());
+					}
 					this.baselines.set(path, update.state.doc.toString());
 				}
 			}),
@@ -355,6 +364,13 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.internalWritePaths.set(file.path, Date.now());
 			}
 			const isSelfWrite = this.selfModifyPaths.delete(file.path);
+			if (!isSelfWrite && this.settings.trackInAppChanges) {
+				const before = this.baselines.get(file.path);
+				const current = await this.app.vault.cachedRead(file);
+				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
+				this.baselines.set(file.path, current);
+				return;
+			}
 			// In-app writes resolve untouched reviews, but edited drafts must
 			// survive and be checked against the new disk version. The plugin's
 			// own accept/reject writes manage pendingDiffs themselves.
