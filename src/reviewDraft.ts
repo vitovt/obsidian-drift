@@ -7,6 +7,14 @@ export interface LifecycleState {
 	/** A deletion review that did not replace an existing content review. */
 	deletionOnly?: boolean;
 	restoreOriginalPath?: boolean;
+	matchContent?: string;
+	renameCandidates?: {path: string; score: number}[];
+	renameSources?: string[];
+	renameDismissed?: boolean;
+}
+
+export function unresolvedRename(diff: LifecycleState): boolean {
+	return !!(diff.renameCandidates?.length || diff.renameSources?.length);
 }
 
 export function renameOnly(diff: ReviewSnapshot): boolean {
