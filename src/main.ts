@@ -499,6 +499,10 @@ export default class ExternalDiffPlugin extends Plugin {
 	/** Handle an external file change, optionally focusing the diff tab. */
 	private handleExternalChange(path: string, oldContent: string, newContent: string): void {
 		const previous = this.pendingDiffs.get(path);
+		if (!previous && this.settings.ignoreEmptyFileChanges && oldContent === "") {
+			this.baselines.set(path, newContent);
+			return;
+		}
 		if (previous && (previous.draftContent !== previous.newContent || previous.conflicted)) {
 			previous.conflicted = previous.newContent !== newContent;
 			this.getExistingDiffView()?.updateReviewStatus(path);

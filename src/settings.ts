@@ -5,6 +5,7 @@ import {addExportSettings} from "./export/settings";
 
 export interface ExternalDiffSettings {
 	enabled: boolean;
+	ignoreEmptyFileChanges: boolean;
 	focusDiffOnChange: boolean;
 	wordWrap: boolean;
 	wordLevelHighlighting: boolean;
@@ -16,6 +17,7 @@ export interface ExternalDiffSettings {
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
+	ignoreEmptyFileChanges: false,
 	focusDiffOnChange: false,
 	wordWrap: false,
 	wordLevelHighlighting: false,
@@ -44,6 +46,15 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.enabled)
 				.onChange(async (value) => {
 					this.plugin.settings.enabled = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName("Ignore changes to empty files")
+			.setDesc("Treat the first content added to an empty file as its starting version. Useful for apps that create an empty file before writing it; later edits are still reviewed.")
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.ignoreEmptyFileChanges)
+				.onChange(async value => {
+					this.plugin.settings.ignoreEmptyFileChanges = value;
 					await this.plugin.saveSettings();
 				}));
 

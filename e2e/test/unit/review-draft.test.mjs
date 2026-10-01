@@ -108,6 +108,27 @@ test('restores legacy entries and discards resolved reviews', () => {
     {oldContent:'a', newContent:'c', draftContent:'c', conflicted:false});
 });
 
+test('ignoring empty baselines skips only the first fill and preserves existing reviews', () => {
+  for (const enabled of [false, true]) {
+    const {plugin, file} = setup();
+    plugin.pendingDiffs.clear();
+    plugin.settings.ignoreEmptyFileChanges = enabled;
+    plugin.getExistingDiffView = () => ({addFile() {}, updateReviewStatus() {}});
+    plugin.handleExternalChange(file.path, '', 'first content');
+    assert.equal(plugin.pendingDiffs.size, enabled ? 0 : 1);
+    if (enabled) {
+      assert.equal(plugin.baselines.get(file.path), 'first content');
+      plugin.handleExternalChange(file.path, plugin.baselines.get(file.path), 'later edit');
+      assert.equal(plugin.pendingDiffs.get(file.path).oldContent, 'first content');
+    }
+    const pending = plugin.pendingDiffs.get(file.path);
+    pending.onDraftChange('my draft');
+    plugin.handleExternalChange(file.path, '', 'another external edit');
+    assert.equal(plugin.pendingDiffs.get(file.path), pending);
+    assert.equal(pending.draftContent, 'my draft');
+  }
+});
+
 test('preserves fully reverted drafts and flags changes made while closed', () => {
   const entry = {oldContent:'a', newContent:'b', draftContent:'a'};
   assert.deepEqual(restoreReview(entry, 'b'), {...entry, conflicted:false});
