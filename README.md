@@ -8,7 +8,7 @@ A VS Code-style side-by-side diff viewer that lives inside Obsidian. Automatical
 
 - **Instant detection** — No polling or delays. Uses CodeMirror 6 transaction monitoring to detect external changes the moment they happen.
 - **Editable review drafts** — Restore individual blocks or edit the result manually, with Undo/Redo, before applying the result to the file.
-- **Accept all / Reject all** — Bulk actions when you have multiple files with pending diffs.
+- **Reject all changes / Accept all changes** — Bulk actions when you have multiple files with pending diffs.
 - **Persistence** — Pending diffs and edited drafts survive Obsidian restarts. Drafts are preserved if the file changes again; obsolete unedited reviews are discarded on reload.
 - **Edit protection** — Editing a file with pending diffs shows a warning modal, preventing accidental data loss.
 - **Tool-agnostic** — Works with any tool that modifies vault files: AI coding agents, sync services, scripts, other plugins.
@@ -47,13 +47,13 @@ Once enabled, the plugin runs automatically. When an external tool modifies a ma
 2. Compare **Original** on the left with **Result (Editable)** on the right
 3. Edit the result or select **Restore original block** (`→`) to copy a block from left to right. These actions change the draft only; the file stays untouched until **Accept**. Use **Undo** / **Redo**, or `Ctrl+Z` / `Ctrl+Shift+Z` (`Cmd` on macOS), to revise your decisions
 4. Use the **Open diff viewer** command to reopen the tab if you close it
-5. Select **Accept** to save the result, or **Reject** to restore the original. **Accept all** and **Reject all** apply the corresponding action to each pending file
+5. Select **Accept** to save the result, or **Reject** to restore the original. **Reject all changes** and **Accept all changes** apply the corresponding action to each pending file
 
 Restoring every block keeps the review open so you can undo or explicitly accept it. Draft text is saved in the plugin's local data and restored after restarting Obsidian. Undo history survives collapsing/reopening views and changing the diff algorithm within the current plugin session; it resets on plugin reload or when starting a comparison against a newer disk version.
 
 If the file changes again while you have an edited draft, Drift keeps the draft and shows **Review latest changes**. Selecting it puts the latest disk version on the left and your draft on the right without writing anything. Review the differences before accepting; **Reject** now keeps that latest comparison baseline. Both Accept and Reject check the disk version before writing, and failed or conflicting files remain open even during bulk actions.
 
-The toolbar centers **Accept all** and **Reject all**, separate from the right-aligned per-file actions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
+The toolbar centers **Reject all changes** and **Accept all changes**, separate from the right-aligned per-file actions. Reject comes first in both places, matching Original on the left and Result on the right. Hover over bulk actions for their descriptions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
 
 Expanded comparisons are indented beneath their file headers. Long file paths wrap when expanded; hover over a path to read it in full, including when the section is collapsed.
 
@@ -75,7 +75,7 @@ With word-level highlighting enabled, turn on **High-contrast word highlighting*
 
 ## Export a review
 
-Select **Export diff** after **Reject all** in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted. Exporting does not accept or reject the reviews.
+Select **Export diff** after the bulk review actions in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted. Exporting does not accept or reject the reviews.
 
 The dialog shows an editable filename. A green message means the name is available; a red message means the existing file **will be overwritten** when you select **Export**. There is no additional overwrite popup. Drift suggests a free name with a suffix such as `-2`, which you can remove manually.
 
