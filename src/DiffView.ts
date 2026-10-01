@@ -205,8 +205,8 @@ export class DiffView extends ItemView {
 			});
 
 			const actions = header.createDiv({cls: "diff-view-actions"});
-			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
 			const rejectBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject"});
+			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
 
 			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleAccept(path); });
 			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleReject(path); });

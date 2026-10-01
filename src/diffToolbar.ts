@@ -18,8 +18,10 @@ export class DiffToolbar extends Component {
 		}
 		const actions = toolbar.createDiv({cls: "diff-view-toolbar-actions"});
 		if (multiple) {
-			const acceptButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept all"});
-			const rejectButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject all"});
+			const rejectButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject all changes"});
+			const acceptButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept all changes"});
+			setTooltip(rejectButton, "Restore Original files");
+			setTooltip(acceptButton, "Accept changed files");
 			this.registerDomEvent(acceptButton, "click", accept);
 			this.registerDomEvent(rejectButton, "click", reject);
 		}
