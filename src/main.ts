@@ -411,7 +411,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			newContent,
 			draftContent: newContent,
 			conflicted: false,
-			onAccept: content => this.completeReview(path, diff, content),
+			onAccept: content => this.completeReview(path, diff, content, true),
 			onReject: () => this.completeReview(path, diff, diff.oldContent),
 			onDraftChange: content => {
 				diff.draftContent = content;
@@ -433,7 +433,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	/** Apply only to the version reviewed, leaving failed/conflicting drafts open. */
-	private async completeReview(path: string, diff: PendingDiff, content: string): Promise<boolean> {
+	private async completeReview(path: string, diff: PendingDiff, content: string, accept = false): Promise<boolean> {
 		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return false;
 		this.refreshMissingReviews();
 		const file = this.app.vault.getAbstractFileByPath(path);
@@ -451,6 +451,10 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (!(file instanceof TFile)) {
 				// create refuses an occupied path, including files arriving during sync.
 				await this.app.vault.create(path, content);
+			} else if (accept && content === diff.newContent) {
+				// Acknowledgement must not emit a write, even when disk changed again.
+				content = await this.app.vault.read(file);
+				if (this.pendingDiffs.get(path) !== diff || file.path !== path) return false;
 			} else {
 				await writeReviewedContent(this.app.vault, file, diff.newContent, content, () => {
 					if (this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();

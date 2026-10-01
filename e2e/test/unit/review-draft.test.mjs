@@ -227,3 +227,10 @@ test('history restores reverted blocks and survives editor recreation', () => {
   assert.equal(redo(target), true);
   assert.equal(state.doc.toString(), 'original');
 });
+
+test('accept untouched content acknowledges without writing', async () => {
+  const {diff, io, plugin} = setup();
+  assert.equal(await diff.onAccept(diff.draftContent), true);
+  assert.equal(io.writes, 0);
+  assert.equal(plugin.pendingDiffs.size, 0);
+});

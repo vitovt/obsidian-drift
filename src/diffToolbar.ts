@@ -21,7 +21,7 @@ export class DiffToolbar extends Component {
 			const rejectButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject all changes"});
 			const acceptButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept all changes"});
 			setTooltip(rejectButton, "Restore Original files");
-			setTooltip(acceptButton, "Accept changed files");
+			setTooltip(acceptButton, "Accept current files without writing. Edited drafts remain open for separate saving.");
 			this.registerDomEvent(acceptButton, "click", accept);
 			this.registerDomEvent(rejectButton, "click", reject);
 		}

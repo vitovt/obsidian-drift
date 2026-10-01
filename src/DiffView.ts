@@ -1,4 +1,4 @@
-import {ItemView, setTooltip, WorkspaceLeaf} from "obsidian";
+import {Notice, ItemView, setTooltip, WorkspaceLeaf} from "obsidian";
 import {Change, MergeView} from "@codemirror/merge";
 import {drawSelection, EditorView, keymap, lineNumbers} from "@codemirror/view";
 import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/commands";
@@ -70,6 +70,7 @@ interface FileSection {
 	mergeContainer: HTMLElement | null;
 	chevron?: HTMLElement;
 	header?: HTMLElement;
+	acceptButton?: HTMLButtonElement;
 	scrollbar?: DiffScrollbar;
 	reviewControls?: ReviewControls;
 }
@@ -140,6 +141,7 @@ export class DiffView extends ItemView {
 
 	updateReviewStatus(path: string): void {
 		const section = this.sections.get(path);
+		if (section?.acceptButton) section.acceptButton.setText(section.diff.draftContent !== section.diff.newContent ? "Save result" : "Accept");
 		if (section) section.reviewControls?.update(section.diff.conflicted, section.diff.missing, section.diff.recreateMissingFile);
 	}
 
@@ -208,6 +210,7 @@ export class DiffView extends ItemView {
 			const rejectBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject"});
 			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
 
+			section.acceptButton = acceptBtn;
 			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleAccept(path); });
 			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleReject(path); });
 
@@ -352,7 +355,12 @@ export class DiffView extends ItemView {
 
 	/** Accept all files and close the diff view. */
 	private async handleAcceptAll(): Promise<void> {
-		for (const path of [...this.sections.keys()]) await this.handleAccept(path);
+		let skipped = 0;
+		for (const [path, section] of [...this.sections]) {
+			if (section.diff.draftContent !== section.diff.newContent) { skipped++; continue; }
+			await this.handleAccept(path);
+		}
+		if (skipped) new Notice(`${skipped} edited drafts kept open. Save each result separately.`);
 	}
 
 	/** Reject all files and close the diff view. */
