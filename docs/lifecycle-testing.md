@@ -34,6 +34,7 @@ Build with `npm run build`, copy `main.js`, `manifest.json`, and `styles.css` to
 8. Verify **Save result** recreates the draft, while **Restore original** recreates Original.
 9. Recreate a deleted note externally with different text. Review its current contents; recovery must not overwrite it silently.
 10. Reload Drift with deletions pending. Reviews and drafts remain available.
+11. Move a note to another name with shell `mv`, wait for the deletion review, and move it back. With unchanged contents and no edited draft, its original-path review disappears. A separate deletion review for the temporary filename can remain; the two paths are intentionally not associated.
 
 ## 4. Bulk actions and export
 
