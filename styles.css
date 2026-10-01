@@ -300,3 +300,34 @@
 	gap: 4px;
 	cursor: pointer;
 }
+
+/* Expanded content is visibly nested beneath its file header. */
+.diff-view-section-header.is-expanded {
+	align-items: flex-start;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+.diff-view-section-header.is-expanded .diff-view-section-left {
+	align-items: flex-start;
+	padding-top: 4px;
+}
+.diff-view-section-header.is-expanded .diff-view-filepath {
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-overflow: clip;
+}
+.diff-view-section > .diff-view-merge {
+	margin-inline-start: 12px;
+	border-inline-start: 2px solid var(--background-modifier-border);
+}
+.diff-view-merge > .diff-view-review-labels {
+	background: var(--background-primary-alt);
+	color: var(--text-muted);
+	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+/* Scope the shared tooltip without requiring newer TooltipOptions APIs. */
+body:has(.diff-view-filepath:hover) .tooltip {
+	max-width: min(80vw, 800px);
+	white-space: normal;
+	overflow-wrap: anywhere;
+	text-align: start;
+}

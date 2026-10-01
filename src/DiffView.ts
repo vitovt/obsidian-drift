@@ -1,4 +1,4 @@
-import {ItemView, WorkspaceLeaf} from "obsidian";
+import {ItemView, setTooltip, WorkspaceLeaf} from "obsidian";
 import {Change, MergeView} from "@codemirror/merge";
 import {drawSelection, EditorView, keymap, lineNumbers} from "@codemirror/view";
 import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/commands";
@@ -69,6 +69,7 @@ interface FileSection {
 	mergeView: MergeView | null;
 	mergeContainer: HTMLElement | null;
 	chevron?: HTMLElement;
+	header?: HTMLElement;
 	scrollbar?: DiffScrollbar;
 	reviewControls?: ReviewControls;
 }
@@ -193,10 +194,12 @@ export class DiffView extends ItemView {
 
 			// Collapsible header
 			const header = block.createDiv({cls: "diff-view-section-header"});
+			section.header = header;
 
 			const left = header.createDiv({cls: "diff-view-section-left"});
 			section.chevron = left.createSpan({cls: `diff-view-chevron ${section.expanded ? "is-expanded" : ""}`, text: "›"});
-			left.createSpan({cls: "diff-view-filepath", text: path});
+			const filename = left.createSpan({cls: "diff-view-filepath", text: path});
+			setTooltip(filename, path, {placement: "bottom"});
 			left.addEventListener("click", () => {
 				this.setExpanded(path, section, !section.expanded);
 			});
@@ -215,6 +218,7 @@ export class DiffView extends ItemView {
 
 	private setExpanded(path: string, section: FileSection, expanded: boolean): void {
 		section.expanded = expanded;
+		section.header?.classList.toggle("is-expanded", expanded);
 		section.chevron?.classList.toggle("is-expanded", expanded);
 		section.mergeContainer?.toggle(expanded);
 		if (!expanded) return;
