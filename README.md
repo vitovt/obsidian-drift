@@ -89,6 +89,8 @@ Exports are saved in the vault root. In **Settings → Drift**, configure:
 
 The patch starts with metadata and a file list, followed by standard unified hunks using `a/` and `b/` paths relative to the vault root. It preserves CRLF and missing final newlines. It describes the pending text comparisons tracked by Drift, not a complete vault backup or a scan for added/deleted files.
 
+Both the header's file list and the patch sections follow the viewer order captured when the export dialog opens. Files whose Result equals Original are omitted without changing the order of the remaining files.
+
 Apply it from the root of a vault containing the **Original** versions (the current externally modified files may already contain some or all of the changes):
 
 ```sh
