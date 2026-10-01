@@ -6,7 +6,7 @@ A VS Code-style side-by-side diff viewer that lives inside Obsidian. Automatical
 
 ## Features
 
-- **Instant detection** — No polling or delays. Uses CodeMirror 6 transaction monitoring to detect external changes the moment they happen.
+- **Event-driven detection** — No polling. Uses CodeMirror 6 transaction monitoring to detect external changes the moment they happen.
 - **Editable review drafts** — Restore individual blocks or edit the result manually, with Undo/Redo, before applying the result to the file.
 - **Reject all changes / Accept all changes** — Bulk actions when you have multiple files with pending diffs.
 - **Persistence** — Pending diffs and edited drafts survive Obsidian restarts. Drafts are preserved if the file changes again; obsolete unedited reviews are discarded on reload.
@@ -45,9 +45,9 @@ Once enabled, the plugin runs automatically. When an external tool modifies a ma
 
 1. A **Drift** tab opens in the background showing the side-by-side diff
 2. Compare **Original** on the left with **Result (Editable)** on the right
-3. Edit the result or select **Restore original block** (`→`) to copy a block from left to right. These actions change the draft only; the file stays untouched until **Accept**. Use **Undo** / **Redo**, or `Ctrl+Z` / `Ctrl+Shift+Z` (`Cmd` on macOS), to revise your decisions
+3. Edit the result or select **Restore original block** (`→`) to copy a block from left to right. These actions change the draft only; the file stays untouched until **Save result**. Use **Undo** / **Redo**, or `Ctrl+Z` / `Ctrl+Shift+Z` (`Cmd` on macOS), to revise your decisions
 4. Use the **Open diff viewer** command to reopen the tab if you close it
-5. Select **Accept** to save the result, or **Reject** to restore the original. **Reject all changes** and **Accept all changes** apply the corresponding action to each pending file
+5. Select **Accept** to acknowledge the current file without writing. After editing the draft, this button becomes **Save result**. **Reject** restores the original. **Accept all changes** leaves edited drafts open for individual saving; **Reject all changes** restores original contents
 
 Restoring every block keeps the review open so you can undo or explicitly accept it. Draft text is saved in the plugin's local data and restored after restarting Obsidian. Undo history survives collapsing/reopening views and changing the diff algorithm within the current plugin session; it resets on plugin reload or when starting a comparison against a newer disk version.
 
@@ -57,7 +57,21 @@ The toolbar centers **Reject all changes** and **Accept all changes**, separate 
 
 Expanded comparisons are indented beneath their file headers. Long file paths wrap when expanded; hover over a path to read it in full, including when the section is collapsed.
 
-If a reviewed file disappears from its original path, Drift displays **Original — file missing**. It does not follow renamed files. Enable **Recreate missing file** in that review to let **Accept** create the Result or **Reject** create the Original at the old path. The checkbox is off by default and also controls whether bulk actions can recreate that file. Recreation requires the original parent folder to exist and never overwrites an occupied path. If the file reappears, the checkbox resets and normal content-conflict checks apply. Reloading Drift or restarting Obsidian drops reviews whose paths are still missing, including their drafts; copy useful draft text or export the diff first.
+If a reviewed file disappears from its original path, Drift displays **Original — file missing**. With experimental rename tracking disabled, it does not follow renamed files. Enable **Recreate missing file** in that review to let **Accept** create the Result or **Reject** create the Original at the old path. The checkbox is off by default and also controls whether bulk actions can recreate that file. Recreation requires the original parent folder to exist and never overwrites an occupied path. If the file reappears, the checkbox resets and normal content-conflict checks apply. Legacy missing-path reviews without tracked rename or deletion metadata are dropped on reload, including their drafts; copy useful draft text or export the diff first.
+
+### Experimental renames and deletions
+
+Both **Track file renames (experimental)** and **Track file deletions (experimental)** are off by default. They use Obsidian events and Drift's existing in-memory Markdown baselines: no additional vault scan, polling, or rename inference. Changes that happen while Drift is not running are not discovered retrospectively. These events also include actions performed inside Obsidian.
+
+Confirmed renames move an existing review to the new path, preserving Original, Result, and session Undo/Redo. **Renamed from** shows the initial path, even after several renames. For content reviews, Accept/Reject use the current path unless **Restore original path** is checked. Pure renames show **No content changes**, with **Keep rename** and **Restore original path** actions. Renaming back clears a pure rename review. Folder renames update existing reviews and baselines without creating a review for every child.
+
+Tracked deletions are delayed briefly (500 ms) so temporary delete/create replacements can settle. A standalone deletion displays all original lines as removed, with **Keep deletion** and **Restore file**. If a file with a pending comparison is deleted, its Original and Result remain available: **Restore original**, **Keep deletion**, and **Save result** choose what happens next. Keeping a deletion with an edited draft asks before discarding the draft. A restored deletion recreates missing parent folders. Existing destinations are never overwritten by recreation.
+
+**Accept all changes** keeps current contents, renames, and deletions without changing files unless a restoration checkbox was explicitly selected; edited drafts remain open. **Reject all changes** restores original contents and deleted files, and reverses pure renames. For renames with content changes it restores the path only when the checkbox is selected. Hover over the bulk buttons for these rules.
+
+Tracked rename and deletion reviews survive plugin reloads and Obsidian restarts. Restoration checkboxes reset; Undo/Redo history remains session-only. A reappearing file is compared again before any write. Restoring a renamed path requires its parent folder to exist and its destination to be free. Case-only restoration can be blocked by a filesystem that treats both spellings as occupied. Drift uses Vault.rename and does not additionally rewrite links in other notes. Content writes and renames are separate operations: if a later operation fails, the review remains available with an error explaining that the file should be checked before retrying.
+
+For a step-by-step test in a disposable vault, see [the lifecycle testing checklist](docs/lifecycle-testing.md).
 
 Enable **Ignore changes to empty files** in plugin settings to treat the first content written to an empty file as its baseline. This is useful for external apps that create an empty file before filling it. The option is off by default, applies only to files with no existing pending review, and treats only zero-character content as empty (not whitespace). Subsequent edits are reviewed normally.
 
@@ -75,7 +89,7 @@ With word-level highlighting enabled, turn on **High-contrast word highlighting*
 
 ## Export a review
 
-Select **Export diff** after the bulk review actions in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted. Exporting does not accept or reject the reviews.
+Select **Export diff** after the bulk review actions in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted unless they carry rename or deletion metadata. Exporting does not accept or reject the reviews.
 
 The dialog shows an editable filename. A green message means the name is available; a red message means the existing file **will be overwritten** when you select **Export**. There is no additional overwrite popup. Drift suggests a free name with a suffix such as `-2`, which you can remove manually.
 
@@ -89,7 +103,9 @@ Exports are saved in the vault root. In **Settings → Drift**, configure:
 
 The patch starts with metadata and a file list, followed by standard unified hunks using `a/` and `b/` paths relative to the vault root. It preserves CRLF and missing final newlines. It describes the pending text comparisons tracked by Drift, not a complete vault backup or a scan for added/deleted files.
 
-Both the header's file list and the patch sections follow the viewer order captured when the export dialog opens. Files whose Result equals Original are omitted without changing the order of the remaining files.
+Both the header's file list and the patch sections follow the viewer order captured when the export dialog opens. Unchanged content-only reviews are omitted without changing the order of the remaining files.
+
+Tracked deletions export Original → `/dev/null`, even if a Result draft remains available for recovery. Rename sections use the **current path** and include uppercase warnings naming the original path: the patch does not perform the rename, so paths may need manual adjustment. Pure renames export metadata only, without invented hunks. A metadata-only export has no text patch to apply. Deleting an empty file uses Git's deleted-file metadata; use `git apply` for that case.
 
 Apply it from the root of a vault containing the **Original** versions (the current externally modified files may already contain some or all of the changes):
 
