@@ -94,3 +94,41 @@ test('unique suggestions preserve the full diff.txt extension', async () => {
   assert.equal(await availableFilename('drift.diff.txt', async name => occupied.has(name)), 'drift-3.diff.txt');
   assert.equal(await availableFilename('free.txt', async () => false), 'free.txt');
 });
+
+for (const tool of ['git', 'patch']) {
+  test(`${tool} applies deletion and renamed-content sections with warning comments`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'drift-lifecycle-export-'));
+    try {
+      await writeFile(join(root, 'gone.md'), 'removed\n');
+      await writeFile(join(root, 'current.md'), 'old\n');
+      const patch = createUnifiedExport([
+        {path: 'gone.md', oldContent: 'removed\n', draftContent: 'preserved draft', deleted: true},
+        {path: 'current.md', originalPath: 'previous.md', oldContent: 'old\n', draftContent: 'new\n'},
+      ]);
+      assert.match(patch, /\+\+\+ \/dev\/null/);
+      assert.ok(patch.indexOf('# WARNING: FILE WAS RENAMED FROM:') < patch.indexOf('diff --git a/current.md'));
+      const applied = spawnSync(tool, tool === 'git' ? ['apply', '-'] : ['--batch', '-p1'], {cwd: root, input: patch, encoding: 'utf8', timeout: 5000});
+      assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+      await assert.rejects(readFile(join(root, 'gone.md')), {code: 'ENOENT'});
+      assert.equal(await readFile(join(root, 'current.md'), 'utf8'), 'new\n');
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+}
+
+test('pure rename exports metadata without invented text changes', () => {
+  const patch = createUnifiedExport([{path: 'new.md', originalPath: 'old.md', oldContent: 'same', draftContent: 'same'}]);
+  assert.match(patch, /FILE WAS RENAMED FROM: "old.md"/);
+  assert.match(patch, /CURRENT PATH: "new.md"/);
+  assert.ok(!patch.includes('@@'));
+});
+
+test('git applies deletion of an empty file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'drift-empty-deletion-'));
+  try {
+    await writeFile(join(root, 'empty.md'), '');
+    const patch = createUnifiedExport([{path: 'empty.md', oldContent: '', draftContent: '', deleted: true}]);
+    const applied = spawnSync('git', ['apply', '-'], {cwd: root, input: patch, encoding: 'utf8', timeout: 5000});
+    assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+    await assert.rejects(readFile(join(root, 'empty.md')), {code: 'ENOENT'});
+  } finally { await rm(root, {recursive: true, force: true}); }
+});

@@ -5,6 +5,8 @@ export interface ExportEntry {
 	oldContent: string;
 	draftContent: string;
 	conflicted?: boolean;
+	originalPath?: string;
+	deleted?: boolean;
 }
 
 export function validContextLines(value: unknown): value is number {
@@ -39,7 +41,10 @@ function range(before: number, count: number): string {
 }
 
 function filePatch(entry: ExportEntry, context: number, unicodePaths: boolean): string {
-	if (entry.oldContent === entry.draftContent) return "";
+	const warning = entry.originalPath
+		? `# WARNING: FILE WAS RENAMED FROM: ${JSON.stringify(entry.originalPath)}\n# CURRENT PATH: ${JSON.stringify(entry.path)}\n# THIS PATCH DOES NOT APPLY THE RENAME.\n# YOU MAY NEED TO ADJUST THE PATCH PATHS MANUALLY.\n`
+		: "";
+	if (entry.oldContent === entry.draftContent && !entry.deleted) return warning;
 	if (!entry.path || entry.path.startsWith("/") || entry.path.includes("\\") ||
 		entry.path.split("/").some(part => !part || part === "." || part === "..")) {
 		throw new Error("Export paths must be relative to the vault root.");
@@ -58,7 +63,7 @@ function filePatch(entry: ExportEntry, context: number, unicodePaths: boolean): 
 		else groups.push({start, end});
 	}
 	const a = quotePath(`a/${entry.path}`, unicodePaths), b = quotePath(`b/${entry.path}`, unicodePaths);
-	const output = [`diff --git ${a} ${b}\n--- ${a}\n+++ ${b}\n`];
+	const output = [warning, `diff --git ${a} ${b}\n${entry.deleted ? "deleted file mode 100644\n" : ""}--- ${a}\n+++ ${entry.deleted ? "/dev/null" : b}\n`];
 	for (const {start, end} of groups) {
 		output.push(`@@ -${range(oldPositions[start]!, oldPositions[end]! - oldPositions[start]!)} +${range(newPositions[start]!, newPositions[end]! - newPositions[start]!)} @@\n`);
 		for (let i = start; i < end; i++) {
@@ -75,7 +80,7 @@ function filePatch(entry: ExportEntry, context: number, unicodePaths: boolean): 
 export function createUnifiedExport(entries: readonly ExportEntry[], context = 3, date = new Date(), unicodePaths = true): string {
 	if (!validContextLines(context)) throw new Error("Context lines must be a non-negative integer.");
 	// The caller supplies viewer order, including any future viewer sorting.
-	const changed = entries.filter(entry => entry.oldContent !== entry.draftContent);
+	const changed = entries.map(entry => entry.deleted ? {...entry, draftContent: ""} : entry).filter(entry => entry.oldContent !== entry.draftContent || entry.deleted || entry.originalPath);
 	if (changed.length === 0) return "";
 	const header = [
 		"Drift diff export",
