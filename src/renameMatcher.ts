@@ -23,6 +23,7 @@ export class RenameMatcher {
 	private generation = 0;
 	private disposed = false;
 	private sources = new Map<PendingDiff, Fingerprint | null>();
+	private nextSource = 0;
 	constructor(private host: Host) {}
 
 	observe(path: string, text: string, created = false): void {
@@ -49,22 +50,38 @@ export class RenameMatcher {
 	async refresh(): Promise<void> {
 		const generation = ++this.generation;
 		const {reviews, vault, settings} = this.host;
-		const sources = [...reviews].filter(([, diff]) => diff.deleted && !diff.renameDismissed).slice(-MAX_CANDIDATES);
+		const pending = [...reviews].filter(([, diff]) => diff.deleted && !diff.renameDismissed);
+		const start = this.nextSource % Math.max(1, pending.length);
+		const sources = [...pending.slice(start), ...pending.slice(0, start)];
 		for (const [path, candidate] of this.created) {
 			if (Date.now() - candidate.observed > RETENTION_MS || !(vault.getAbstractFileByPath(path) instanceof TFile)) this.created.delete(path);
 		}
 		for (const source of this.sources.keys()) if (!sources.some(([, diff]) => diff === source)) this.sources.delete(source);
 		const results = new Map<string, {path: string; score: number}[]>();
-		let textBudget = MAX_TEXT;
+		let batchText = 0;
+		let batchCount = 0;
 		if (settings.enabled && settings.trackFileRenames) {
 			for (const [path, diff] of sources) {
 				const text = diff.matchContent ?? diff.newContent;
-				if (text.length > textBudget) { this.sources.delete(diff); continue; }
-				textBudget -= text.length;
+				if (batchCount >= MAX_CANDIDATES || batchText + text.length > MAX_TEXT) {
+					await new Promise<void>(resolve => setTimeout(resolve, 0));
+					if (this.disposed || generation !== this.generation) return;
+					batchText = batchCount = 0;
+				}
+				batchText += text.length;
+				batchCount++;
+				this.nextSource = (this.nextSource + 1) % Math.max(1, pending.length);
 				let source = this.sources.get(diff);
 				if (source === undefined || source?.text !== text) {
 					source = fingerprint(text);
+					this.sources.delete(diff);
 					this.sources.set(diff, source);
+					let cachedText = [...this.sources.values()].reduce((sum, value) => sum + (value?.text.length ?? 0), 0);
+					while (this.sources.size > MAX_CANDIDATES || cachedText > MAX_TEXT) {
+						const oldest = [...this.sources.keys()][0]!;
+						cachedText -= this.sources.get(oldest)?.text.length ?? 0;
+						this.sources.delete(oldest);
+					}
 				}
 				if (!source || vault.getAbstractFileByPath(path)) continue;
 				const candidates: {path: string; score: number}[] = [];

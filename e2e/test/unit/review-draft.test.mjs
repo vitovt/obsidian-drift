@@ -739,3 +739,15 @@ test('missing content reviews preserve edited drafts across restart', async () =
   assert.equal(restored.missing, true);
   assert.equal(restored.recreateMissingFile, undefined);
 });
+
+test('matching visits older pending sources beyond one bounded batch', async () => {
+  const {matcher, deleted, created} = matcherSetup();
+  try {
+    const oldest = deleted('oldest.md');
+    for (let i = 0; i < 129; i++) deleted(`missing-${i}.md`, `different short text ${i}`);
+    created('moved.md');
+    await matcher.refresh();
+    assert.equal(oldest.renameCandidates[0].path, 'moved.md');
+    assert.ok(matcher.sources.size <= 128);
+  } finally { matcher.dispose(); }
+});
