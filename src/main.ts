@@ -10,6 +10,7 @@ import {validContextLines} from "./export/unifiedDiff";
 import {RenameMatcher} from "./renameMatcher";
 import {RenameReviewModal} from "./renameReviewModal";
 import {InternalOperations} from "./internalOperations";
+import {markPresent} from "./reviewTransitions";
 import {FileLifecycle} from "./fileLifecycle";
 
 interface PersistedData {
@@ -35,6 +36,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private pendingDiffs = new Map<string, PendingDiff>();
 	private baselines = new Map<string, string>();
 	private selfModifyPaths = new Set<string>();
+	private typingContents = new Map<string, string>();
 	private internalWritePaths = new Map<string, number>();
 	private pendingEditWarning = new Set<string>();
 	private restoredDiffs: PersistedDiffEntry[] = [];
@@ -82,7 +84,9 @@ export default class ExternalDiffPlugin extends Plugin {
 
 		// Baseline housekeeping
 		this.registerEvent(this.app.vault.on("create", this.handleCreate));
-		this.registerEvent(this.app.vault.on("delete", file => this.lifecycle.deleted(file, this.internalOperations.isInternal(file.path))));
+		this.registerEvent(this.app.vault.on("delete", file => {
+			if (!this.applying.has(file.path)) this.lifecycle.deleted(file, this.internalOperations.isInternal(file.path));
+		}));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
 			if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath, this.internalOperations.isInternal(oldPath));
 		}));
@@ -181,6 +185,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private serializePendingDiffs(): PersistedDiffEntry[] {
 		return Array.from(this.pendingDiffs.entries()).map(([path, diff]) => ({
 			path,
+			created: diff.created,
 			oldContent: diff.oldContent,
 			newContent: diff.newContent,
 			draftContent: diff.draftContent,
@@ -222,10 +227,11 @@ export default class ExternalDiffPlugin extends Plugin {
 			}
 
 			const currentContent = await this.app.vault.read(file);
-			const snapshot = restoreReview(entry, currentContent) ?? (entry.originalPath ? {oldContent: entry.oldContent, newContent: currentContent, draftContent: currentContent, conflicted: false} : null);
+			const snapshot = restoreReview(entry, currentContent) ?? (entry.originalPath || entry.created ? {oldContent: entry.oldContent, newContent: currentContent, draftContent: currentContent, conflicted: false} : null);
 			if (!snapshot) continue;
 			const diff = Object.assign(this.makeDiffCallbacks(entry.path, snapshot.oldContent, snapshot.newContent), snapshot);
 			diff.originalPath = entry.originalPath;
+			diff.created = entry.created;
 			diff.renameSources = entry.renameSources;
 			diff.internalReview = entry.internalReview;
 			this.pendingDiffs.set(entry.path, diff);
@@ -298,6 +304,7 @@ export default class ExternalDiffPlugin extends Plugin {
 						this.handleExternalChange(path, oldContent, newContent);
 					}
 				} else {
+					this.typingContents.set(path, update.state.doc.toString());
 					this.renameMatcher?.observe(path, update.state.doc.toString());
 					if (this.settings.trackInAppChanges) {
 						const previous = this.baselines.get(path);
@@ -349,10 +356,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && (!internal || this.settings.trackApiChanges)) {
 				this.handleExternalChange(path, baseline, current);
 			} else if (previous) {
-				previous.deleted = false;
-				previous.deletionOnly = false;
-				previous.missing = false;
-				previous.recreateMissingFile = false;
+				markPresent(previous);
 				const edited = previous.draftContent !== previous.newContent;
 				if (!edited && current === previous.oldContent && !previous.originalPath) {
 					// The deletion/content change is undone; no decision remains to apply.
@@ -363,10 +367,14 @@ export default class ExternalDiffPlugin extends Plugin {
 				} else {
 					const diff = this.makeDiffCallbacks(path, previous.oldContent, current);
 					diff.originalPath = previous.originalPath;
+					diff.created = previous.created;
 					this.pendingDiffs.set(path, diff);
 				}
 				this.persistState();
 				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
+			}
+			if (!previous && baseline === undefined && trackCreation && this.settings.enabled && (!internal || this.settings.trackApiChanges && current !== "")) {
+				this.handleExternalChange(path, "", current, false, true);
 			}
 			const pending = this.pendingDiffs.get(path);
 			if (pending) pending.matchContent = current;
@@ -396,15 +404,20 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.internalWritePaths.set(file.path, Date.now());
 			}
 			const isSelfWrite = this.selfModifyPaths.delete(file.path);
+			const current = await this.app.vault.cachedRead(file);
+			if (!isSelfWrite && this.typingContents.get(file.path) === current) {
+				this.typingContents.delete(file.path);
+				this.baselines.set(file.path, current);
+				this.persistState();
+				return;
+			}
 			if (!isSelfWrite && this.settings.trackApiChanges) {
 				const before = this.baselines.get(file.path);
-				const current = await this.app.vault.cachedRead(file);
 				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
 				this.baselines.set(file.path, current);
 				return;
 			}
 			// Ignoring an API write must not silently accept a previous external review.
-			const current = await this.app.vault.cachedRead(file);
 			this.baselines.set(file.path, current);
 			const pending = this.pendingDiffs.get(file.path);
 			if (pending && !isSelfWrite) {
@@ -551,6 +564,17 @@ export default class ExternalDiffPlugin extends Plugin {
 		}
 		this.applying.add(path);
 		try {
+			if (diff.created && !accept) {
+				if (file instanceof TFile) {
+					const current = await this.app.vault.read(file);
+					if (current !== diff.newContent || file.path !== path || this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
+					await this.app.fileManager.trashFile(file);
+				}
+				this.pendingDiffs.delete(path);
+				this.baselines.delete(path);
+				this.persistState();
+				return true;
+			}
 			const restorePath = diff.originalPath && (diff.restoreOriginalPath || (!accept && renameOnly(diff)));
 			if (restorePath) {
 				const target = diff.originalPath!;
@@ -655,6 +679,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			diff.draftContent = previous.draftContent;
 			diff.renameSources = previous.renameSources;
 			diff.originalPath = previous.originalPath;
+			diff.created = previous.created;
 			this.pendingDiffs.set(path, diff);
 			this.getExistingDiffView()?.addFile(path, diff);
 			this.persistState();
@@ -665,11 +690,11 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	/** Handle an external file change, optionally focusing the diff tab. */
-	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false): void {
+	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false, created = false): void {
 		this.renameMatcher?.observe(path, newContent);
 		const previous = this.pendingDiffs.get(path);
 		if (previous) previous.matchContent = newContent;
-		if (!previous && this.settings.ignoreEmptyFileChanges && oldContent === "") {
+		if (!created && !previous && this.settings.ignoreEmptyFileChanges && oldContent === "") {
 			this.baselines.set(path, newContent);
 			return;
 		}
@@ -682,6 +707,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		if (previous?.newContent === newContent) return;
 		const diff = this.makeDiffCallbacks(path, previous?.oldContent ?? oldContent, newContent);
 		diff.originalPath = previous?.originalPath;
+		diff.created = previous?.created ?? created;
 		diff.internalReview = internal;
 		diff.renameSources = previous?.renameSources ?? [...this.pendingDiffs].filter(([, review]) => review.renameCandidates?.some(candidate => candidate.path === path)).map(([source]) => source);
 		diff.matchContent = newContent;

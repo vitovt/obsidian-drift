@@ -7,9 +7,9 @@ export function selectExportEntries(reviews: Iterable<readonly [string, ReviewSn
 	let omitted = 0;
 	for (const [path, diff] of reviews) {
 		if (unresolvedRename(diff)) { omitted++; continue; }
-		if (diff.oldContent === diff.draftContent && !diff.deleted && !diff.originalPath) continue;
+		if (diff.oldContent === diff.draftContent && !diff.deleted && !diff.originalPath && !diff.created) continue;
 		entries.push({path, oldContent: diff.oldContent, draftContent: diff.deleted ? "" : diff.draftContent,
-			originalPath: diff.originalPath, deleted: diff.deleted, conflicted: diff.conflicted});
+			created: diff.created, originalPath: diff.originalPath, deleted: diff.deleted, conflicted: diff.conflicted});
 	}
 	return {entries, omitted};
 }

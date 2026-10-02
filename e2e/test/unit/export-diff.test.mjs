@@ -132,3 +132,15 @@ test('git applies deletion of an empty file', async () => {
     await assert.rejects(readFile(join(root, 'empty.md')), {code: 'ENOENT'});
   } finally { await rm(root, {recursive: true, force: true}); }
 });
+
+for (const content of ['', 'new note\n']) {
+  test(`git applies creation exports including empty notes: ${content.length}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'drift-created-'));
+    try {
+      const patch = createUnifiedExport([{path: 'new.md', oldContent: '', draftContent: content, created: true}]);
+      const applied = spawnSync('git', ['apply', '-'], {cwd: root, input: patch, encoding: 'utf8', timeout: 5000});
+      assert.equal(applied.status, 0, applied.stdout + applied.stderr);
+      assert.equal(await readFile(join(root, 'new.md'), 'utf8'), content);
+    } finally { await rm(root, {recursive: true, force: true}); }
+  });
+}

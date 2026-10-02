@@ -162,8 +162,8 @@ export class DiffView extends ItemView {
 		const diff = section.diff;
 		if (section.acceptButton) section.acceptButton.disabled = unresolvedRename(diff);
 		if (section.rejectButton) section.rejectButton.disabled = unresolvedRename(diff);
-		section.acceptButton?.setText(diff.deleted ? "Keep deletion" : renameOnly(diff) ? "Keep rename" : diff.draftContent !== diff.newContent ? "Save result" : "Accept");
-		section.rejectButton?.setText(diff.deleted ? diff.deletionOnly ? "Restore file" : "Restore original" : renameOnly(diff) ? "Restore original path" : "Reject");
+		section.acceptButton?.setText(diff.deleted ? "Keep deletion" : diff.created && diff.draftContent === diff.newContent ? "Keep new file" : renameOnly(diff) ? "Keep rename" : diff.draftContent !== diff.newContent ? "Save result" : "Accept");
+		section.rejectButton?.setText(diff.created ? "Move new file to trash" : diff.deleted ? diff.deletionOnly ? "Restore file" : "Restore original" : renameOnly(diff) ? "Restore original path" : "Reject");
 		section.reviewControls?.update(diff.conflicted, diff.missing, diff.recreateMissingFile, diff.deleted);
 	}
 
@@ -178,7 +178,7 @@ export class DiffView extends ItemView {
 	}
 
 	private updateExportAvailability(): void {
-		this.toolbar?.setExportEnabled(Array.from(this.sections.values()).some(({diff}) => !unresolvedRename(diff) && (diff.oldContent !== diff.draftContent || !!diff.deleted || !!diff.originalPath)));
+		this.toolbar?.setExportEnabled(Array.from(this.sections.values()).some(({diff}) => !unresolvedRename(diff) && (diff.oldContent !== diff.draftContent || !!diff.deleted || !!diff.originalPath || !!diff.created)));
 	}
 
 	private render(): void {

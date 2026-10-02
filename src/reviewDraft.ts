@@ -2,6 +2,7 @@ import type {TFile, Vault} from "obsidian";
 
 export interface LifecycleState {
 	path?: string;
+	created?: boolean;
 	originalPath?: string;
 	deleted?: boolean;
 	/** A deletion review that did not replace an existing content review. */
@@ -19,7 +20,7 @@ export function unresolvedRename(diff: LifecycleState): boolean {
 }
 
 export function renameOnly(diff: ReviewSnapshot): boolean {
-	return !!diff.originalPath && !diff.deleted && diff.oldContent === diff.newContent && diff.draftContent === diff.newContent;
+	return !!diff.originalPath && !diff.created && !diff.deleted && diff.oldContent === diff.newContent && diff.draftContent === diff.newContent;
 }
 
 export interface ReviewSnapshot extends LifecycleState {

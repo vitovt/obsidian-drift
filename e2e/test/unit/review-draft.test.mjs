@@ -774,3 +774,38 @@ test('API review is independent of typing review', async () => {
   assert.equal(plugin.pendingDiffs.get(file.path).newContent, 'AI API write');
   assert.equal(plugin.pendingDiffs.get(file.path).internalReview, false);
 });
+
+test('external creation opens a review, persists, and rejects to trash', async () => {
+  const {plugin, file, io} = setup('new note');
+  plugin.pendingDiffs.clear(); plugin.baselineReady = true;
+  plugin.ensureDiffTab = async () => ({addFile() {}});
+  let trashed = false;
+  plugin.app.fileManager = {trashFile: async () => { trashed = true; }};
+  await plugin.handleCreate(file);
+  assert.equal(plugin.pendingDiffs.get(file.path).created, true);
+  const saved = plugin.serializePendingDiffs(); plugin.pendingDiffs.clear();
+  await plugin.restorePendingDiffs(saved);
+  const diff = plugin.pendingDiffs.get(file.path);
+  assert.equal(diff.created, true);
+  assert.equal(await diff.onReject(), true);
+  assert.equal(trashed, true); assert.equal(io.writes, 0);
+});
+
+test('creation review refuses to trash contents changed since review', async () => {
+  const {plugin, diff, io} = setup(); diff.created = true;
+  let trashed = false; plugin.app.fileManager = {trashFile: async () => { trashed = true; }};
+  io.disk = 'another device wrote this';
+  assert.equal(await diff.onReject(), false);
+  assert.equal(trashed, false); assert.equal(diff.conflicted, true);
+});
+
+test('editor autosaves do not become plugin reviews when typing review is off', async () => {
+  const {plugin, file} = setup('my typing');
+  plugin.pendingDiffs.clear(); plugin.settings.trackApiChanges = true;
+  plugin.typingContents.set(file.path, 'my typing');
+  file.saving = true;
+  plugin.app.vault.cachedRead = async () => 'my typing';
+  await plugin.handleModify(file);
+  assert.equal(plugin.pendingDiffs.size, 0);
+  assert.equal(plugin.baselines.get(file.path), 'my typing');
+});

@@ -1,6 +1,7 @@
 import {TFile, type TAbstractFile, type Vault} from "obsidian";
 import type {PendingDiff} from "./DiffView";
 import type {ExternalDiffSettings} from "./settings";
+import {markDeleted} from "./reviewTransitions";
 import {renameOnly} from "./reviewDraft";
 
 interface LifecycleHost {
@@ -40,13 +41,15 @@ export class FileLifecycle {
 			if (vault.getAbstractFileByPath(path) instanceof TFile) continue;
 			const previous = reviews.get(path);
 			const baseline = baselines.get(path);
+			if (previous?.created && previous.draftContent === previous.newContent) {
+				reviews.delete(path);
+				baselines.delete(path);
+				continue;
+			}
 			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackApiChanges) && (previous || baseline !== undefined)) {
 				const diff = previous ?? this.host.make(path, baseline!, baseline!);
 				diff.matchContent ??= previous?.newContent ?? baseline;
-				diff.deletionOnly = previous ? !!previous.deletionOnly : true;
-				diff.deleted = true;
-				diff.missing = true;
-				diff.recreateMissingFile = false;
+				markDeleted(diff, previous ? !!previous.deletionOnly : true);
 				reviews.set(path, diff);
 			}
 			baselines.delete(path);
