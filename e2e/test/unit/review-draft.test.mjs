@@ -25,7 +25,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export {EditorSaves} from './src/editorSaves'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -34,7 +34,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {EditorSaves, reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -797,11 +797,61 @@ test('editor autosaves do not become plugin reviews when typing review is off', 
   const {plugin, file} = setup('my typing');
   plugin.pendingDiffs.clear(); plugin.settings.trackApiChanges = true;
   plugin.typingContents.set(file.path, 'my typing');
+  plugin.baselines.set(file.path, 'my typing');
   file.saving = true;
   plugin.app.vault.cachedRead = async () => 'my typing';
   await plugin.handleModify(file);
   assert.equal(plugin.pendingDiffs.size, 0);
   assert.equal(plugin.baselines.get(file.path), 'my typing');
+});
+
+test('delayed URL autosave never reverses a newer editor link conversion', async () => {
+  for (const withDraft of [false, true]) {
+    const {plugin, file, diff} = setup();
+    if (!withDraft) plugin.pendingDiffs.clear();
+    else diff.draftContent = 'precious draft';
+    plugin.settings.trackApiChanges = true;
+    plugin.ensureDiffTab = async () => ({addFile() {}});
+    const raw = 'https://example.com/';
+    const linked = '[Example](https://example.com/)';
+    plugin.typingContents.set(file.path, raw);
+    plugin.typingContents.set(file.path, linked);
+    plugin.baselines.set(file.path, linked);
+    file.saving = true;
+    for (const saved of [raw, linked]) {
+      plugin.app.vault.cachedRead = async () => saved;
+      await plugin.handleModify(file);
+      assert.equal(plugin.baselines.get(file.path), linked);
+      assert.equal(plugin.pendingDiffs.size, withDraft ? 1 : 0);
+      if (withDraft) {
+        assert.equal(plugin.pendingDiffs.get(file.path), diff);
+        assert.equal(diff.draftContent, 'precious draft');
+      }
+    }
+    if (!withDraft) {
+      // A later API write of that same raw URL is a real change, not an autosave.
+      plugin.app.vault.cachedRead = async () => raw;
+      await plugin.handleModify(file);
+      assert.equal(plugin.pendingDiffs.get(file.path).oldContent, linked);
+      assert.equal(plugin.pendingDiffs.get(file.path).newContent, raw);
+    }
+  }
+});
+
+test('editor advancing during an autosave read does not rewind the baseline', async () => {
+  const {plugin, file} = setup();
+  plugin.pendingDiffs.clear(); plugin.settings.trackApiChanges = true;
+  plugin.typingContents.set(file.path, 'URL');
+  plugin.baselines.set(file.path, 'URL');
+  file.saving = true;
+  let resolveRead;
+  plugin.app.vault.cachedRead = () => new Promise(resolve => { resolveRead = resolve; });
+  const pending = plugin.handleModify(file);
+  plugin.typingContents.set(file.path, 'Markdown link');
+  plugin.baselines.set(file.path, 'Markdown link');
+  resolveRead('URL'); await pending;
+  assert.equal(plugin.pendingDiffs.size, 0);
+  assert.equal(plugin.baselines.get(file.path), 'Markdown link');
 });
 
 test('startup reconciles offline edits, creations, deletions and rename candidates', async () => {
@@ -966,4 +1016,23 @@ test('initial copy create/modify events settle into one baseline, independently 
   io.disk = 'later edit'; await plugin.handleModify(file);
   assert.equal(plugin.pendingDiffs.get(file.path).oldContent, 'initial copied content');
   assert.equal(plugin.pendingDiffs.get(file.path).newContent, 'later edit');
+});
+
+
+test('editor autosave history expires and stays bounded', () => {
+  const originalNow = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  try {
+    const saves = new EditorSaves();
+    saves.set('note.md', 'old editor text');
+    now += 10001;
+    assert.equal(saves.consume('note.md', 'old editor text'), false);
+    for (let i = 0; i < 100; i++) saves.set('note.md', `version ${i}`);
+    assert.equal(saves.consume('note.md', 'version 0'), false);
+    assert.equal(saves.consume('note.md', 'version 99'), true);
+    assert.equal(saves.consume('note.md', 'version 99'), false);
+    saves.set('large.md', 'x'.repeat(9 * 1024 * 1024));
+    assert.equal(saves.entries.length, 0);
+  } finally { Date.now = originalNow; }
 });

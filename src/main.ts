@@ -15,6 +15,7 @@ import {markDeleted, markPresent} from "./reviewTransitions";
 import {CreationQueue} from "./creationQueue";
 import {ReviewOperations} from "./reviewOperations";
 import {FileLifecycle} from "./fileLifecycle";
+import {EditorSaves} from "./editorSaves";
 
 interface PersistedData {
 	settings?: Partial<ExternalDiffSettings>;
@@ -40,7 +41,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private pendingDiffs = new Map<string, PendingDiff>();
 	private baselines = new Map<string, string>();
 	private selfModifyPaths = new Set<string>();
-	private typingContents = new Map<string, string>();
+	private typingContents = new EditorSaves();
 	private internalWritePaths = new Map<string, number>();
 	private pendingEditWarning = new Set<string>();
 	private savedBaselines: [string, string][] | undefined;
@@ -107,11 +108,13 @@ export default class ExternalDiffPlugin extends Plugin {
 		// Baseline housekeeping
 		this.registerEvent(this.app.vault.on("create", this.handleCreate));
 		this.registerEvent(this.app.vault.on("delete", file => {
+			this.typingContents.delete(file.path);
 			const internal = this.internalOperations.isInternal(file.path);
 			const event = () => { if (!this.applying.has(file.path)) this.lifecycle.deleted(file, internal); };
 			if (this.initializing) this.startupEvents.push(event); else event();
 		}));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+			this.typingContents.delete(oldPath);
 			const internal = this.internalOperations.isInternal(oldPath);
 			const event = () => { if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath, internal); };
 			if (this.initializing) this.startupEvents.push(event); else event();
@@ -141,6 +144,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	onunload() {
 		this.disposed = true;
+		this.typingContents.clear();
 		this.creationQueue.dispose();
 		if (this.saveTimer) {
 			activeWindow.clearTimeout(this.saveTimer);
@@ -488,12 +492,13 @@ export default class ExternalDiffPlugin extends Plugin {
 			const isSelfWrite = this.selfModifyPaths.delete(file.path);
 			const current = await this.app.vault.cachedRead(file);
 			if (!stillCurrent()) return;
-			if (!isSelfWrite && this.typingContents.get(file.path) === current) {
-				this.typingContents.delete(file.path);
-				this.baselines.set(file.path, current);
+			if (!isSelfWrite && this.typingContents.consume(file.path, current)) {
+				// The editor already established its baseline. An older autosave
+				// must neither rewind it nor create a reverse review.
 				this.persistState();
 				return;
 			}
+			this.typingContents.delete(file.path);
 			if (!isSelfWrite && this.settings.trackApiChanges) {
 				const before = this.baselines.get(file.path);
 				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
@@ -635,6 +640,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	/** Handle an external file change, optionally focusing the diff tab. */
 	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false, created = false): void {
+		if (!internal) this.typingContents.delete(path);
 		this.renameMatcher?.observe(path, newContent);
 		this.baselines.set(path, newContent);
 		const previous = this.pendingDiffs.get(path);
