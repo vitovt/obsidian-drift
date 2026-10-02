@@ -1,62 +1,71 @@
-# Test experimental file lifecycle reviews
+# Lifecycle review testing
 
-Build with `npm run build`, copy `main.js`, `manifest.json`, and `styles.css` to a test vault's `.obsidian/plugins/drift/`, and reload Drift. Start with both experimental settings and **Track in-app changes** disabled. Use disposable Markdown files.
+Use a disposable vault. Run `npm run build`, copy `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/drift/`, and reload Drift. Do not copy plugin `data.json` from a different vault.
 
-## 1. Acknowledge and save
+## Defaults and copied files
 
-1. Create a note in Obsidian, then change its text externally.
-2. Select **Accept**. Verify its content and modification time do not change.
-3. Repeat, edit Result, and verify the action becomes **Save result**.
-4. With another pending file, select **Accept all changes**. The edited draft must remain open; other files must not be rewritten.
-5. Select **Save result** and verify only the edited draft is written.
+1. Leave **Review newly created files** off. Copy a nonempty Markdown file into the vault from outside it: no creation review should appear.
+2. Edit that file externally: expect Original to contain the copied text and Result to contain the edit.
+3. Enable **Track renames and deletions (experimental)**. Move a known file externally: the new path remains eligible for matching even though new-file reviews are off.
+4. Enable **Review newly created files** and copy another file: expect **Keep new file** and **Move new file to trash**. Edit Result and expect **Save result**. Keeping it must not change its modification time.
+5. Test an empty creation with both settings combinations. **Ignore changes to empty files** only suppresses the first fill of an empty baseline without a pending review; it does not control initial creation reviews.
 
-## 2. Confirmed renames
+## Edits and replacement saves
 
-1. Enable **Track file renames (experimental)** and **Track in-app changes**.
-2. Rename an unchanged note inside Obsidian. Expect a compact review, its current path, the previous path, and **No content changes**.
-3. Select **Keep rename**. The file stays at its current path without a content write.
-4. Rename again, then select **Restore original path**. Verify the original name returns.
-5. Create an external content change, edit Result, and rename the note twice. Original, Result, and Undo/Redo must survive; the initial path remains in the label.
-6. Reject without the checkbox: restore only content at the current path. Repeat with **Restore original path** checked: restore content and path.
-7. Occupy the original path with another file. Restoration must fail without overwriting either file or changing content.
-8. Rename a folder containing pending reviews. Only existing reviews follow it; unchanged children do not each create a review.
-9. Reload Drift with a rename pending. Its paths and draft survive; the restoration checkbox resets.
+1. Modify an existing file externally. **Keep current** acknowledges it without writing. **Restore original** restores its previous content.
+2. Delete and recreate a known path quickly with different text, as an atomic-save editor might: expect a content review, not a silently replaced baseline.
+3. Edit Result, restore a block, and use Undo/Redo. The disk must not change until **Save result**.
+4. Update the file externally while a draft exists. **Review latest changes** must retain the draft and use current disk text as the new comparison baseline.
+5. Change the file again immediately before saving/restoring: the operation must refuse to overwrite the new version and retain the review.
 
-## 3. Deletions
+## Origins
 
-1. Enable **Track file deletions (experimental)**.
-2. Delete a known note externally. After about half a second expect all its text shown as removed and a read-only empty result.
-3. Select **Keep deletion**. No file is created.
-4. Repeat and select **Restore file**. Its last known contents return.
-5. Delete a folder containing a known note, then restore the note. Missing parent folders are recreated.
-6. Delete a note with an edited Result. Verify the draft remains editable and **Restore original**, **Keep deletion**, and **Save result** are available.
-7. Verify **Keep deletion** asks before discarding an edited draft. Cancel and check the draft remains.
-8. Verify **Save result** recreates the draft, while **Restore original** recreates Original.
-9. Recreate a deleted note externally with different text. Review its current contents; recovery must not overwrite it silently.
-10. Reload Drift with deletions pending. Reviews and drafts remain available.
-11. Move a note to another name with shell `mv`, wait for the deletion review, and move it back. With unchanged contents and no edited draft, its original-path review disappears. A separate deletion review for the temporary filename can remain; the two paths are intentionally not associated.
+1. With **Review my typing** off, type and wait for autosave: no new review.
+2. With **Review plugin and file operations** on, write via `vault.modify`, frontmatter APIs, or a connected AI tool: expect review for both open and closed notes.
+3. Turn API review off and repeat: no new review. If an external review already existed, the API write must not silently dismiss it.
+4. Enable typing review: typing should be included without repeated edit-warning prompts for an untouched typing review.
+5. Recognized moves must keep existing reviews usable even with detection or lifecycle creation disabled. API-origin classification includes in-app file operations; test this separately from typing.
 
-## 4. Bulk actions and export
+## Renames and decisions
 
-1. Prepare a pure rename, a content change with a rename, a deleted file, and an edited draft.
-2. Inspect both bulk-action tooltips.
-3. Export while some sections are collapsed. Verify viewer order, uppercase rename warnings, current paths, and `/dev/null` for deleted files.
-4. **Accept all changes** keeps current filenames, contents, and deletions; edited drafts remain open. Repeat with explicit restoration checkboxes separately.
-5. **Reject all changes** restores deleted files and original contents. Pure renames reverse; content-review renames reverse only with their checkbox selected.
+1. Rename a known file with `mv`. Expect **Possible rename** and its best candidate. Preview and confirm: the file must not be written or moved by confirmation.
+2. Repeat with small content edits. The preview uses last known contents; the subsequent review preserves Original.
+3. Create duplicate/template destinations. Scores indicate similarity; no association happens without confirmation.
+4. Edit Result before moving. Confirm the association: draft and available Undo/Redo survive. Select **Undo association**, then **Look for matches again** and confirm again. Later draft edits must survive undoing the association.
+5. Select **Treat as separate files**, then **Look for matches again**. Dismissal must be reversible. Test manual selection too.
+6. Change a candidate after preview: confirmation must request a fresh preview. An independently edited destination review must not be discarded.
+7. For pure renames, test **Keep rename** and **Restore original path**. For renames plus edits, **Restore original** must restore both contents and initial path; **Save result** keeps the current path.
+8. Occupy the original path: restoration must fail before changing content. Test a missing original folder and case-only rename on applicable filesystems.
+9. Rename a folder: existing review objects and drafts follow it. Exceed 128 missing sources and verify older sources still get examined. Large creation batches show matching-limit feedback.
+10. Rename out and back. The original-path review clears when its content is unchanged and no draft remains. Without confirmed identity, a temporary-path deletion review may remain.
 
-## 5. External rename suggestions
+## Missing files and deletions
 
-1. Disable **Track in-app changes**, enable **Track file renames (experimental)**, and leave Drift running.
-2. Create a disposable note with several paragraphs. Rename it using `mv` or an external editor. Expect a missing-file review offering the new path as a possible rename, without associating it automatically.
-3. Select **Review candidates…**, then **Preview** and **Confirm rename**. Expect **No content changes**, the new path, and **Renamed from**. Confirmation must not write files.
-4. Repeat with a few lines changed in the renamed file. Expect a high similarity score and a preview of those changes. After confirmation, Original is preserved and Result contains the current file.
-5. Try two identical destination files. Both must be listed; neither is automatically selected. Select **Keep separate** and verify normal deletion/content actions become available.
-6. Make a Result draft before externally renaming. Confirm the rename and verify the draft and session Undo/Redo survive. If the destination changed too, review the content conflict before saving.
-7. Change the candidate after opening its preview. Confirmation must fail with a request to preview again.
-8. Deliver deletion first and creation later; then test creation first and deletion shortly afterward. Also create an empty destination and fill it afterward. Suggestions should appear once sufficient content is available.
-9. With suggestions unresolved, exercise both bulk buttons and export. Both source and candidate reviews must remain untouched and omitted; the UI must show the omitted count.
-10. Reload Drift or disable rename tracking with suggestions unresolved. The pending association must remain unresolved. Try manual selection when the automatic candidate is absent.
-11. Rename/edit/delete inside Obsidian with **Track in-app changes** off: no new reviews. Existing reviews must follow recognized moves. Enable the option and repeat: new reviews should appear; ordinary typing should continue without repeated pending-review prompts.
-12. For Dropbox, perform a rename plus small edits on another PC while offline, then sync with this vault and Drift running. Check the suggestions; repeat with duplicate notes and resolve the ambiguity manually.
+1. Delete a known note. After the settling delay, inspect **Keep deletion** and **Restore file**.
+2. Delete a note with an edited draft. Test **Save result**, **Restore original**, and the discard warning on **Keep deletion**.
+3. With lifecycle tracking off, make a draft, remove its file, and restart. The draft must remain recoverable as a missing-file review.
+4. Use **Restore result** or **Restore original** directly, without a permission checkbox. Missing parent folders should be recreated. **Discard review** must explain that it removes the saved draft without modifying files.
+5. Recreate the path with other contents before restoring: never overwrite it silently.
 
-Matching is intentionally bounded: up to 128 recent creation paths for 30 minutes and 128 pending missing-file sources, with text-size limits. No extra vault scan is performed. Events missed while Drift is stopped are not reconstructed. See the README for all limits.
+## Startup, sync and persistence
+
+1. The first run establishes a baseline without opening reviews for existing notes.
+2. With **Review changes made while closed** on, disable Drift, edit an existing file, add a new one, and rename/delete a known file. Re-enable Drift: expect offline edits and enabled lifecycle reviews. New-file review still follows its own setting.
+3. Repeat with an edited draft pending: preserve the draft and mark a conflict if disk content changed.
+4. Test a read failure during startup: retain the checkpoint and draft and show a retry notice.
+5. Turn checkpoint recording off and save settings: stored checkpoints should be removed while pending reviews remain.
+6. Deliver deletion before creation with a long delay, then creation before deletion within the retention window. Both should suggest a match. After the creation window expires, manual selection remains available.
+7. **Two-device Dropbox test:** edit and rename offline on another device, then synchronize while Drift is running; repeat while Obsidian is closed and reopen it. Include duplicates, folder moves, and delete/create replacement saves. Verify local results and remote propagation separately. Automated filesystem tests do not validate Dropbox's actual event delivery.
+
+## Bulk actions and export
+
+1. Prepare ordinary edits, an edited draft, a pure rename, rename plus edits, a deletion, an optional new-file review, and an unresolved rename.
+2. Check visible counts. **Keep all current** writes nothing and skips drafts, missing recovery files, conflicts, and unresolved associations.
+3. **Restore originals…** previews affected files, new files to trash, renames, deletions, and drafts to discard. Cancel must change nothing. Confirm restores both content and paths consistently.
+4. Resolve an ambiguous association while a bulk operation runs: excluded or changed reviews must not be applied under a stale decision.
+5. Export collapsed and expanded reviews. Check ordering, creation/deletion `/dev/null` paths, uppercase rename warnings, and omitted-association counts. Deletion export does not export a saved recovery draft.
+6. Apply exports with Git and GNU patch in a separate fixture directory. Use Git for empty-file creation/deletion. Test filename collisions and open-after-export routes.
+
+## Automated checks
+
+Run `npm run test:review`, `npm run test:diff`, `npm run test:export`, `npm run build`, and `npm run lint`. Run `npm run bench:rename` for the reproducible matching workload. See [performance results](rename-performance.md) for the measured environment and limits; the benchmark does not render the Obsidian UI.
