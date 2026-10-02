@@ -624,7 +624,6 @@ export default class ExternalDiffPlugin extends Plugin {
 	private refreshMissingReviews(): void {
 		for (const [path, diff] of this.pendingDiffs) {
 			const missing = !(this.app.vault.getAbstractFileByPath(path) instanceof TFile);
-			if (missing !== !!diff.missing) diff.recreateMissingFile = false;
 			if (!missing && diff.deleted) {
 				diff.deleted = false;
 				diff.deletionOnly = false;

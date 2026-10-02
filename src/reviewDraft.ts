@@ -7,7 +7,6 @@ export interface LifecycleState {
 	deleted?: boolean;
 	/** A deletion review that did not replace an existing content review. */
 	deletionOnly?: boolean;
-	restoreOriginalPath?: boolean;
 	internalReview?: boolean;
 	matchContent?: string;
 	renameCandidates?: {path: string; score: number}[];

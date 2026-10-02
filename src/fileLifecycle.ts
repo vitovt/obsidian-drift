@@ -89,11 +89,9 @@ export class FileLifecycle {
 				diff.originalPath ??= path;
 				diff.path = next;
 				diff.missing = false;
-				diff.recreateMissingFile = false;
 				if (diff.originalPath === next) {
 					const wasRenameOnly = renameOnly(diff);
 					diff.originalPath = undefined;
-					diff.restoreOriginalPath = false;
 					if (wasRenameOnly) continue;
 				}
 				reviews.set(next, diff);

@@ -74,15 +74,13 @@ test('explicit restore actions recreate missing results and originals', async ()
   }
 });
 
-test('a reappearing file resets recreation permission and checks its content', async () => {
+test('a reappearing file is checked against the reviewed contents', async () => {
   const {plugin, diff, file, io} = setup();
   plugin.app.vault.getAbstractFileByPath = () => null;
   plugin.refreshMissingReviews();
-  diff.recreateMissingFile = true;
   plugin.app.vault.getAbstractFileByPath = () => file;
   io.disk = 'new Dropbox contents';
   assert.equal(await diff.onReject(), false);
-  assert.equal(diff.recreateMissingFile, false);
   assert.equal(diff.conflicted, true);
   assert.equal(io.writes, 0);
 });
@@ -91,7 +89,6 @@ test('failed recreation preserves the review and never falls back to overwriting
   const {plugin, diff, io} = setup();
   plugin.app.vault.getAbstractFileByPath = () => null;
   plugin.refreshMissingReviews();
-  diff.recreateMissingFile = true;
   plugin.app.vault.create = async () => { throw new Error('File already exists'); };
   const originalError = console.error;
   console.error = () => {};
@@ -304,7 +301,7 @@ test('renaming back removes a pure rename and folder events only migrate existin
 
 test('occupied original paths block restoration before any content write', async () => {
   const {rename, diff, files, io} = lifecycleSetup();
-  rename('new.md'); diff.restoreOriginalPath = true;
+  rename('new.md');
   files.set('note.md', new TFile('note.md'));
   const log = console.error; console.error = () => {};
   try { assert.equal(await diff.onReject(), false); } finally { console.error = log; }
@@ -339,12 +336,11 @@ test('transient deletion is ignored and standalone deletion restores parents', a
   lifecycle.dispose();
 });
 
-test('lifecycle reviews survive restart and restore consent is not persisted', async () => {
+test('lifecycle reviews preserve paths and drafts across restart', async () => {
   const {plugin, diff, rename, files} = lifecycleSetup();
-  rename('new.md'); diff.restoreOriginalPath = true; diff.deleted = true; diff.draftContent = 'draft';
+  rename('new.md'); diff.deleted = true; diff.draftContent = 'draft';
   files.clear();
   const entries = plugin.serializePendingDiffs();
-  assert.equal(entries[0].restoreOriginalPath, undefined);
   plugin.pendingDiffs.clear();
   await plugin.restorePendingDiffs(entries);
   const restored = plugin.pendingDiffs.get('new.md');
@@ -735,7 +731,6 @@ test('missing content reviews preserve edited drafts across restart', async () =
   const restored = plugin.pendingDiffs.get('note.md');
   assert.equal(restored.draftContent, 'precious edited draft');
   assert.equal(restored.missing, true);
-  assert.equal(restored.recreateMissingFile, undefined);
 });
 
 test('matching visits older pending sources beyond one bounded batch', async () => {

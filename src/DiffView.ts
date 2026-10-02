@@ -58,7 +58,6 @@ export const DIFF_VIEW_TYPE = "external-diff-view";
 
 export interface PendingDiff extends ReviewSnapshot {
 	missing?: boolean;
-	recreateMissingFile?: boolean;
 	/** Session-only history and selection; only the draft text is persisted. */
 	editorState?: EditorState;
 	onAccept: (content: string) => Promise<boolean>;
