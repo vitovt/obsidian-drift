@@ -25,6 +25,7 @@ Use a disposable vault. Run `npm run build`, copy `main.js`, `manifest.json`, an
 3. Turn API review off and repeat: no new review. If an external review already existed, the API write must not silently dismiss it.
 4. Enable typing review: typing should be included without repeated edit-warning prompts for an untouched typing review.
 5. Recognized moves must keep existing reviews usable even with detection or lifecycle creation disabled. API-origin classification includes in-app file operations; test this separately from typing.
+6. With typing review off and API review on, paste a URL and let an editor-based link-title plugin format it. Wait for autosaves: no reverse Markdown-link → URL review should appear. Then make a genuine Vault API edit and verify that it is still reviewed. A pre-existing incorrect, unedited review can be dismissed with **Keep current**, which retains the current disk contents.
 
 ## Renames and decisions
 
