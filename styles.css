@@ -403,3 +403,15 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	bottom: 0;
 	background: var(--background-primary);
 }
+
+
+/* Separate settings groups without changing Obsidian's native control layout. */
+.drift-settings-section + .drift-settings-section {
+	margin-top: 24px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.drift-settings-section > .setting-item:first-child {
+	border-top: none;
+}
