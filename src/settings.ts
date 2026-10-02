@@ -8,6 +8,7 @@ export interface ExternalDiffSettings {
 	trackInAppChanges: boolean;
 	trackApiChanges: boolean;
 	reviewWhileClosed: boolean;
+	reviewNewFiles: boolean;
 	trackFileRenames: boolean;
 	trackFileDeletions: boolean;
 	ignoreEmptyFileChanges: boolean;
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	trackInAppChanges: false,
 	trackApiChanges: true,
 	reviewWhileClosed: true,
+	reviewNewFiles: false,
 	trackFileRenames: false,
 	trackFileDeletions: false,
 	ignoreEmptyFileChanges: false,
@@ -60,6 +62,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				}));
 
 		for (const [key, name, description] of [
+			["reviewNewFiles", "Review newly created files", "Show a review when a new Markdown file appears. Off by default: new files establish a baseline and remain available for rename matching; later edits are still reviewed."],
 			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Disable to remove checkpoints on the next save."],
 			["trackInAppChanges", "Review my typing", "Include edits made in the Obsidian editor. Your typing is ignored by default."],
 			["trackApiChanges", "Review plugin and file operations", "Include writes through Obsidian APIs, including connected AI tools, plugins, and in-app file operations. Their individual origins cannot always be distinguished."],

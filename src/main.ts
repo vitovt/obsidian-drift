@@ -171,7 +171,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			for (const [path, text] of contents) {
 				if (restoredPaths.has(path)) continue;
 				const before = previous.get(path);
-				if (before !== text) this.handleExternalChange(path, before ?? "", text, false, before === undefined);
+				if (before !== text && (before !== undefined || this.settings.reviewNewFiles)) this.handleExternalChange(path, before ?? "", text, false, before === undefined);
 			}
 			for (const [path, text] of previous) {
 				if (contents.has(path) || unavailable.has(path)) continue;
@@ -424,7 +424,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.persistState();
 				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
 			}
-			if (!previous && baseline === undefined && trackCreation && this.settings.enabled && (!internal || this.settings.trackApiChanges && current !== "")) {
+			if (!previous && baseline === undefined && trackCreation && this.settings.reviewNewFiles && this.settings.enabled && (!internal || this.settings.trackApiChanges && current !== "")) {
 				this.handleExternalChange(path, "", current, false, true);
 			}
 			const pending = this.pendingDiffs.get(path);

@@ -777,7 +777,7 @@ test('API review is independent of typing review', async () => {
 
 test('external creation opens a review, persists, and rejects to trash', async () => {
   const {plugin, file, io} = setup('new note');
-  plugin.pendingDiffs.clear(); plugin.baselineReady = true;
+  plugin.pendingDiffs.clear(); plugin.baselineReady = true; plugin.settings.reviewNewFiles = true;
   plugin.ensureDiffTab = async () => ({addFile() {}});
   let trashed = false;
   plugin.app.fileManager = {trashFile: async () => { trashed = true; }};
@@ -814,6 +814,7 @@ test('startup reconciles offline edits, creations, deletions and rename candidat
   const {plugin, matcher, files, contents} = matcherSetup();
   try {
     plugin.settings.reviewWhileClosed = true;
+    plugin.settings.reviewNewFiles = true;
     plugin.savedBaselines = [['edited.md', 'before'], ['old.md', matchText]];
     for (const [path, text] of [['edited.md', 'after'], ['moved.md', matchText]]) {
       files.set(path, new TFile(path)); contents.set(path, text);
@@ -878,4 +879,24 @@ test('startup scan bounds concurrent reads and preserves per-file failures', asy
   });
   assert.equal(contents.size, 14); assert.deepEqual([...unavailable], ['3.md']);
   assert.ok(peak <= 4);
+});
+
+test('new files establish a baseline by default, remain rename candidates, and later edits are reviewed', async () => {
+  const {plugin, matcher, deleted, files, contents} = matcherSetup();
+  try {
+    plugin.baselineReady = true; plugin.settings.reviewNewFiles = false;
+    plugin.ensureDiffTab = async () => ({addFile() {}});
+    const source = deleted('old.md');
+    const file = new TFile('copied.md'); files.set(file.path, file); contents.set(file.path, matchText);
+    await plugin.handleCreate(file);
+    assert.equal(plugin.pendingDiffs.has(file.path), false);
+    assert.equal(plugin.baselines.get(file.path), matchText);
+    await matcher.refresh();
+    assert.equal(source.renameCandidates[0].path, file.path);
+    const changed = matchText + '\nLater edit'; contents.set(file.path, changed);
+    await plugin.handleModify(file);
+    assert.equal(plugin.pendingDiffs.get(file.path).oldContent, matchText);
+    assert.equal(plugin.pendingDiffs.get(file.path).newContent, changed);
+    assert.equal(plugin.pendingDiffs.get(file.path).created, false);
+  } finally { matcher.dispose(); }
 });
