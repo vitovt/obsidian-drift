@@ -369,3 +369,18 @@ body:has(.diff-view-filepath:hover) .tooltip {
 .diff-rename-status.is-error {
 	color: var(--text-error);
 }
+
+.diff-view-bulk-counts {
+	grid-column: 1 / -1;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.diff-view-toolbar-actions,
+.diff-view-actions {
+	flex-wrap: wrap;
+}
+
+.diff-view-rename-suggestions:empty {
+	display: none;
+}

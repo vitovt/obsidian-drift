@@ -1,8 +1,10 @@
 import {strict as assert} from 'node:assert';
 import {test} from 'node:test';
 import {build} from 'esbuild';
-import {EditorState} from '@codemirror/state';
-import {history, historyField, undo, redo, undoDepth} from '@codemirror/commands';
+import {createRequire} from 'node:module';
+const rootRequire = createRequire(new URL('../../../package.json', import.meta.url));
+const {EditorState} = rootRequire('@codemirror/state');
+const {history, historyField, undo, redo, undoDepth} = rootRequire('@codemirror/commands');
 
 const mock = `
 export class Component {}
@@ -23,7 +25,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -32,7 +34,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -56,19 +58,15 @@ function setup(disk = 'external') {
   return {plugin, file, io, diff};
 }
 
-test('missing files require explicit recreation for both accept and reject', async () => {
+test('explicit restore actions recreate missing results and originals', async () => {
   for (const accept of [true, false]) {
     const {plugin, diff, io, file} = setup();
     plugin.app.vault.getAbstractFileByPath = () => null;
+    plugin.app.vault.createFolder = async () => {};
     let created;
     plugin.app.vault.create = async (path, content) => { created = {path, content}; return file; };
     diff.onDraftChange('edited draft');
     const apply = () => accept ? diff.onAccept(diff.draftContent) : diff.onReject();
-    assert.equal(await apply(), false);
-    assert.equal(diff.missing, true);
-    assert.equal(created, undefined);
-    assert.equal(plugin.pendingDiffs.size, 1);
-    diff.recreateMissingFile = true;
     assert.equal(await apply(), true);
     assert.deepEqual(created, {path: 'note.md', content: accept ? 'edited draft' : 'original'});
     assert.equal(plugin.pendingDiffs.size, 0);
@@ -881,6 +879,38 @@ test('startup scan bounds concurrent reads and preserves per-file failures', asy
   assert.ok(peak <= 4);
 });
 
+test('rename dismissal is reversible and manual association can be undone', async () => {
+  const {matcher, deleted, created, plugin} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md');
+    await matcher.refresh(); matcher.keepSeparate(diff); await matcher.refresh();
+    assert.equal(diff.renameCandidates.length, 0);
+    matcher.resume(diff); await matcher.refresh();
+    assert.equal(diff.renameCandidates[0].path, 'new.md');
+    await matcher.confirm('old.md', diff, 'new.md', matchText);
+    diff.draftContent = 'draft edited after association';
+    await diff.onUndoRename();
+    assert.equal(plugin.pendingDiffs.get('old.md'), diff);
+    assert.equal(diff.deleted, true);
+    assert.equal(diff.draftContent, 'draft edited after association');
+    assert.equal(plugin.pendingDiffs.has('new.md'), false);
+  } finally { matcher.dispose(); }
+});
+
+test('suggestion-only updates leave comparison editors intact', () => {
+  const {diff} = setup();
+  const view = Object.create(DiffView.prototype);
+  view.settings = {trackFileRenames: true};
+  view.sections = new Map([['note.md', {diff, layoutKey: view.layoutKey('note.md', diff), mergeView: {sentinel: true}}]]);
+  view.updateReviewStatus = () => {};
+  view.updateExportAvailability = () => {};
+  let rebuilt = false; view.render = () => { rebuilt = true; };
+  diff.renameSources = ['missing.md'];
+  view.syncFiles(new Map([['note.md', diff]]));
+  assert.equal(rebuilt, false);
+  assert.equal(view.sections.get('note.md').mergeView.sentinel, true);
+});
+
 test('new files establish a baseline by default, remain rename candidates, and later edits are reviewed', async () => {
   const {plugin, matcher, deleted, files, contents} = matcherSetup();
   try {
@@ -899,4 +929,28 @@ test('new files establish a baseline by default, remain rename candidates, and l
     assert.equal(plugin.pendingDiffs.get(file.path).newContent, changed);
     assert.equal(plugin.pendingDiffs.get(file.path).created, false);
   } finally { matcher.dispose(); }
+});
+
+test('bulk restoration never applies new or changed reviews outside its confirmation', async () => {
+  const {diff} = setup();
+  const view = Object.create(DiffView.prototype);
+  view.sections = new Map([['note.md', {diff}]]);
+  const approved = new Map([['note.md', {diff, decision: reviewDecision(diff)}]]);
+  diff.draftContent = 'draft changed while dialog was open';
+  view.sections.set('later.md', {diff: {...diff}});
+  let restored = 0; view.handleReject = async () => { restored++; };
+  await view.handleRejectAll(approved);
+  assert.equal(restored, 0);
+});
+
+test('keep and restore labels and counts describe actual lifecycle effects', () => {
+  const {diff} = setup();
+  assert.equal(reviewLabels(diff).keep, 'Keep current');
+  diff.originalPath = 'old.md';
+  assert.equal(reviewLabels(diff).restore, 'Restore original');
+  diff.missing = true;
+  assert.equal(reviewLabels(diff).keep, 'Restore result');
+  const counts = summarizeReviews([diff]);
+  assert.equal(counts.keep, 0); assert.equal(counts.restore, 1);
+  assert.equal(counts.conflicts, 0); assert.equal(counts.unavailable, 1);
 });

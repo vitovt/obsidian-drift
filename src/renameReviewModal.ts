@@ -36,16 +36,15 @@ export class RenameReviewModal extends Modal {
 		if (!candidates.length) this.contentEl.createEl("p", {text: "No automatic match found. You can select a file manually."});
 		for (const candidate of candidates) {
 			new Setting(this.contentEl).setName(candidate.path)
-				.setDesc(`${Math.floor(candidate.score * 100)}% similarity`)
+				.setDesc(candidate.score === 1 ? "Identical contents" : `${Math.floor(candidate.score * 100)}% content similarity`)
 				.addButton(button => button.setButtonText("Preview").onClick(() => { void this.select(candidate.path); }));
 		}
 		new Setting(this.contentEl)
 			.addButton(button => button.setButtonText("Select another file…").onClick(() => {
 				new RenameFilePicker(this.app, this.path, file => { void this.select(file.path); }).open();
 			}))
-			.addButton(button => button.setButtonText("Keep separate").onClick(() => { this.matcher.keepSeparate(this.diff); this.close(); }));
-		// eslint-disable-next-line obsidianmd/ui/sentence-case -- Original is the literal comparison label.
-		if (this.diff.draftContent !== this.diff.newContent) this.contentEl.createEl("p", {text: "Your edited result and undo history will be preserved. The preview compares Original with the selected file."});
+			.addButton(button => button.setButtonText("Treat as separate files").onClick(() => { this.matcher.keepSeparate(this.diff); this.close(); }));
+		if (this.diff.draftContent !== this.diff.newContent) this.contentEl.createEl("p", {text: "Your edited result and undo history will be preserved. The preview compares the last known contents with the selected file."});
 		this.previewEl = this.contentEl.createDiv({cls: "diff-rename-preview"});
 		this.status = this.contentEl.createDiv({cls: "diff-rename-status", attr: {"aria-live": "polite"}});
 		this.status.setText("Preview a candidate before confirming the rename.");
@@ -54,6 +53,7 @@ export class RenameReviewModal extends Modal {
 			.addButton(button => {
 				button.setButtonText("Confirm rename").setCta().onClick(() => { void this.confirm(); });
 				this.confirmButton = button.buttonEl;
+				this.confirmButton.disabled = true;
 			});
 		if (candidates.length === 1) void this.select(candidates[0]!.path);
 	}
@@ -69,15 +69,15 @@ export class RenameReviewModal extends Modal {
 		try {
 			const file = this.app.vault.getAbstractFileByPath(path);
 			if (!(file instanceof TFile) || file.extension !== "md") throw new Error("The selected Markdown file is no longer available.");
-			if (file.stat.size > 1024 * 1024 || this.diff.oldContent.length > 1024 * 1024) throw new Error("This file exceeds the 1 MB rename preview limit.");
+			if (file.stat.size > 1024 * 1024 || (this.diff.matchContent ?? this.diff.newContent).length > 1024 * 1024) throw new Error("This file exceeds the 1 MB rename preview limit.");
 			const content = await this.app.vault.read(file);
 			if (this.closed || generation !== this.generation) return;
 			if (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file) throw new Error("The selected file moved. Select it again.");
 			const extensions = [lineNumbers(), EditorView.lineWrapping, EditorState.readOnly.of(true), EditorView.editable.of(false)];
 			this.preview = new MergeView({parent: this.previewEl,
-				a: {doc: this.diff.oldContent, extensions}, b: {doc: content, extensions},
+				a: {doc: this.diff.matchContent ?? this.diff.newContent, extensions}, b: {doc: content, extensions},
 				highlightChanges: true, diffConfig: {scanLimit: 500, timeout: 50}});
-			this.status.setText(`Original → ${path}. Confirming associates the review; it does not modify files.`);
+			this.status.setText(`Last known contents → ${path}. Confirm rename links this review to the selected file; it does not move or modify files.`);
 			this.selected = {path, content};
 			this.confirmButton.disabled = false;
 		} catch (error) {

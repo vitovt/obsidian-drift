@@ -1,12 +1,13 @@
 import {TFile, type Vault} from "obsidian";
 import type {PendingDiff} from "./DiffView";
 import type {ExternalDiffSettings} from "./settings";
-import {fingerprint, similarity, type Fingerprint} from "./renameSimilarity";
+import {markPresent} from "./reviewTransitions";
+import {fingerprint, similarity, MAX_MATCH_TEXT, type Fingerprint} from "./renameSimilarity";
 
 const MAX_CANDIDATES = 128;
 const MAX_TEXT = 2 * 1024 * 1024;
 const RETENTION_MS = 30 * 60 * 1000;
-interface Candidate {print: Fingerprint | null; observed: number}
+interface Candidate {text: string; print?: Fingerprint | null; observed: number}
 interface Host {
 	vault: Vault;
 	settings: ExternalDiffSettings;
@@ -24,19 +25,23 @@ export class RenameMatcher {
 	private disposed = false;
 	private sources = new Map<PendingDiff, Fingerprint | null>();
 	private nextSource = 0;
+	status = "";
+	private limited = false;
 	constructor(private host: Host) {}
 
 	observe(path: string, text: string, created = false): void {
 		if (this.disposed || !this.host.settings.enabled || !this.host.settings.trackFileRenames) return;
 		if (!created && !this.created.has(path)) return;
-		const print = fingerprint(text);
+		const previous = this.created.get(path);
+		if (text.length > MAX_MATCH_TEXT) { this.limited = true; this.created.delete(path); this.schedule(); return; }
 		this.created.delete(path);
-		this.created.set(path, {print, observed: Date.now()});
-		let size = [...this.created.values()].reduce((sum, value) => sum + (value.print?.text.length ?? 0), 0);
+		this.created.set(path, {text, print: previous?.text === text ? previous.print : undefined, observed: Date.now()});
+		let size = [...this.created.values()].reduce((sum, value) => sum + value.text.length, 0);
 		while (this.created.size > MAX_CANDIDATES || size > MAX_TEXT) {
 			const first = [...this.created.keys()][0]!;
-			size -= (this.created.get(first)!.print?.text.length ?? 0);
+			size -= this.created.get(first)!.text.length;
 			this.created.delete(first);
+			this.limited = true;
 		}
 		this.schedule();
 	}
@@ -55,6 +60,13 @@ export class RenameMatcher {
 		const sources = [...pending.slice(start), ...pending.slice(0, start)];
 		for (const [path, candidate] of this.created) {
 			if (Date.now() - candidate.observed > RETENTION_MS || !(vault.getAbstractFileByPath(path) instanceof TFile)) this.created.delete(path);
+		}
+		this.status = settings.enabled && settings.trackFileRenames && sources.length ? `Checking ${sources.length} missing files for rename matches…` : "";
+		this.host.changed();
+		for (const candidate of this.created.values()) {
+			if (candidate.print === undefined) candidate.print = fingerprint(candidate.text);
+			await new Promise<void>(resolve => setTimeout(resolve, 0));
+			if (this.disposed || generation !== this.generation) return;
 		}
 		for (const source of this.sources.keys()) if (!sources.some(([, diff]) => diff === source)) this.sources.delete(source);
 		const results = new Map<string, {path: string; score: number}[]>();
@@ -118,12 +130,19 @@ export class RenameMatcher {
 			}
 		}
 		const after = JSON.stringify([...reviews.values()].map(diff => [diff.renameCandidates ?? [], diff.renameSources ?? []]));
-		if (before !== after) this.host.changed();
+		this.status = this.limited ? "Some files exceed automatic matching limits. Use Select renamed file to search manually." : "";
+		if (before !== after || sources.length || this.limited) this.host.changed();
 	}
 
 	keepSeparate(diff: PendingDiff): void {
 		diff.renameDismissed = true;
 		diff.renameCandidates = [];
+		this.schedule();
+		this.host.changed();
+	}
+
+	resume(diff: PendingDiff): void {
+		diff.renameDismissed = false;
 		this.schedule();
 		this.host.changed();
 	}
@@ -140,6 +159,7 @@ export class RenameMatcher {
 		if (other && (other.draftContent !== other.newContent || other.conflicted || other.originalPath)) {
 			throw new Error("The selected file has its own unfinished review. Resolve it before associating these files.");
 		}
+		const before = {...diff};
 		const edited = diff.draftContent !== diff.newContent;
 		if (!edited) {
 			if (diff.draftContent !== current) diff.editorState = undefined;
@@ -150,7 +170,8 @@ export class RenameMatcher {
 		diff.originalPath ??= sourcePath;
 		diff.path = targetPath;
 		if (diff.originalPath === targetPath) diff.originalPath = undefined;
-		diff.deleted = diff.deletionOnly = diff.missing = diff.recreateMissingFile = false;
+		markPresent(diff);
+		diff.renameDismissed = false;
 		diff.renameCandidates = [];
 		diff.renameSources = [];
 		diff.matchContent = current;
@@ -165,6 +186,29 @@ export class RenameMatcher {
 		this.created.delete(targetPath);
 		this.host.baselines.set(targetPath, current);
 		for (const entry of reviews.values()) entry.renameCandidates = entry.renameCandidates?.filter(candidate => candidate.path !== targetPath);
+		const associatedDraft = diff.draftContent;
+		diff.onUndoRename = async () => {
+			const targetNow = vault.getAbstractFileByPath(targetPath);
+			const latest = targetNow instanceof TFile ? await vault.read(targetNow) : null;
+			if (reviews.get(targetPath) !== diff || vault.getAbstractFileByPath(sourcePath) ||
+				this.host.busy(sourcePath) || this.host.busy(targetPath)) throw new Error("The paths changed. Resolve the current review before undoing this association.");
+			const currentDraft = diff.draftContent;
+			const editorState = diff.editorState;
+			Object.assign(diff, before);
+			diff.originalPath = before.originalPath;
+			diff.created = before.created;
+			if (currentDraft !== associatedDraft) { diff.draftContent = currentDraft; diff.editorState = editorState; }
+			diff.onUndoRename = undefined;
+			diff.renameDismissed = true;
+			diff.renameCandidates = [];
+			reviews.delete(targetPath);
+			reviews.set(sourcePath, diff);
+			if (other) { other.conflicted = latest !== null && latest !== other.newContent; reviews.set(targetPath, other); }
+			if (latest !== null) this.observe(targetPath, latest, true);
+			this.host.changed();
+			this.schedule();
+			await Promise.resolve();
+		};
 		this.host.changed();
 		this.schedule();
 	}

@@ -4,6 +4,9 @@ import {drawSelection, EditorView, keymap, lineNumbers} from "@codemirror/view";
 import {defaultKeymap, history, historyField, historyKeymap} from "@codemirror/commands";
 import {Compartment, EditorState} from "@codemirror/state";
 import type {ExternalDiffSettings} from "./settings";
+import {reviewLabels, summarizeReviews, reviewDecision} from "./reviewActions";
+import {ConfirmActionModal} from "./ConfirmActionModal";
+import {renderRenameSuggestions} from "./renameSuggestions";
 import {DiffToolbar} from "./diffToolbar";
 import {selectExportEntries} from "./export/reviewEntries";
 import {ExportModal} from "./export/ExportModal";
@@ -63,6 +66,8 @@ export interface PendingDiff extends ReviewSnapshot {
 	onKeepDeletion: () => Promise<boolean>;
 	onFindRename?: () => void;
 	onKeepSeparate?: () => void;
+	onResumeMatching?: () => void;
+	onUndoRename?: () => Promise<void>;
 	onDraftChange: (content: string) => void;
 	onReviewLatest: () => Promise<void>;
 }
@@ -79,6 +84,8 @@ interface FileSection {
 	rejectButton?: HTMLButtonElement;
 	scrollbar?: DiffScrollbar;
 	reviewControls?: ReviewControls;
+	suggestions?: HTMLElement;
+	layoutKey?: string;
 }
 
 export class DiffView extends ItemView {
@@ -87,8 +94,9 @@ export class DiffView extends ItemView {
 	private wordLevelHighlighting: boolean;
 	private toolbar: DiffToolbar | null = null;
 	private applying = new Set<string>();
+	private omissionStatus?: HTMLElement;
 
-	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings) {
+	constructor(leaf: WorkspaceLeaf, private settings: ExternalDiffSettings, private matchingStatus: () => string = () => "") {
 		super(leaf);
 		this.wordLevelHighlighting = settings.wordLevelHighlighting;
 	}
@@ -146,6 +154,19 @@ export class DiffView extends ItemView {
 	}
 
 	syncFiles(diffs: Map<string, PendingDiff>): void {
+		const same = diffs.size === this.sections.size && [...diffs].every(([path, diff], index) => {
+			const section = this.sections.get(path);
+			return [...this.sections.keys()][index] === path && section?.diff === diff && section.layoutKey === this.layoutKey(path, diff);
+		});
+		if (same) {
+			for (const [path, section] of this.sections) {
+				this.updateReviewStatus(path);
+				if (section.suggestions) renderRenameSuggestions(section.suggestions, section.diff, this.settings.trackFileRenames);
+			}
+			this.updateOmissions();
+			this.updateExportAvailability();
+			return;
+		}
 		const old = [...this.sections.values()];
 		this.sections.clear();
 		for (const [path, diff] of diffs) {
@@ -162,9 +183,11 @@ export class DiffView extends ItemView {
 		const diff = section.diff;
 		if (section.acceptButton) section.acceptButton.disabled = unresolvedRename(diff);
 		if (section.rejectButton) section.rejectButton.disabled = unresolvedRename(diff);
-		section.acceptButton?.setText(diff.deleted ? "Keep deletion" : diff.created && diff.draftContent === diff.newContent ? "Keep new file" : renameOnly(diff) ? "Keep rename" : diff.draftContent !== diff.newContent ? "Save result" : "Accept");
-		section.rejectButton?.setText(diff.created ? "Move new file to trash" : diff.deleted ? diff.deletionOnly ? "Restore file" : "Restore original" : renameOnly(diff) ? "Restore original path" : "Reject");
-		section.reviewControls?.update(diff.conflicted, diff.missing, diff.recreateMissingFile, diff.deleted);
+		const labels = reviewLabels(diff);
+		section.acceptButton?.setText(labels.keep);
+		section.rejectButton?.setText(labels.restore);
+		section.reviewControls?.update(diff.conflicted, diff.missing, diff.deleted);
+		this.updateBulkCounts();
 	}
 
 	async onOpen(): Promise<void> {}
@@ -185,12 +208,8 @@ export class DiffView extends ItemView {
 		if (this.toolbar) this.removeChild(this.toolbar);
 		this.toolbar = null;
 		this.updateContrast();
-		for (const section of this.sections.values()) {
-			this.destroyMergeView(section);
-			section.mergeView = null;
-			section.mergeContainer = null;
-		}
-
+		const focused = this.containerEl.ownerDocument.activeElement as HTMLElement | null;
+		const scrollTop = this.containerEl.querySelector(".diff-view-scroll")?.scrollTop ?? 0;
 		const container = this.containerEl.children[1] as HTMLElement;
 		container.empty();
 		container.addClass("diff-view-container");
@@ -203,14 +222,14 @@ export class DiffView extends ItemView {
 		this.toolbar = this.addChild(new DiffToolbar(container, this.sections.size > 1,
 			value => {
 				for (const [path, section] of this.sections) this.setExpanded(path, section, value);
-			}, () => { void this.handleAcceptAll(); }, () => { void this.handleRejectAll(); }, () => {
+			}, () => { void this.handleAcceptAll(); }, () => this.confirmRestoreAll(), () => {
 				const {entries, omitted} = selectExportEntries([...this.sections].map(([path, section]) => [path, section.diff] as const));
 				new ExportModal(this.app, entries, this.settings.exportFilenameTemplate, this.settings.exportContextLines, this.settings.exportUnicodePaths, omitted).open();
 			}));
 		this.updateExportAvailability();
 
-		const uncertain = [...this.sections.values()].filter(({diff}) => unresolvedRename(diff)).length;
-		if (uncertain) container.createDiv({cls: "diff-view-review-status", text: `${uncertain} unresolved rename items excluded from bulk actions and export.`});
+		this.omissionStatus = container.createDiv({cls: "diff-view-review-status", attr: {"aria-live": "polite"}});
+		this.updateOmissions();
 		const scrollArea = container.createDiv({cls: "diff-view-scroll"});
 
 		for (const [path, section] of this.sections) {
@@ -229,8 +248,8 @@ export class DiffView extends ItemView {
 			});
 
 			const actions = header.createDiv({cls: "diff-view-actions"});
-			const rejectBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject"});
-			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept"});
+			const rejectBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Restore original"});
+			const acceptBtn = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Keep current"});
 
 			section.acceptButton = acceptBtn;
 			section.rejectButton = rejectBtn;
@@ -239,28 +258,38 @@ export class DiffView extends ItemView {
 				save.disabled = unresolvedRename(section.diff);
 				save.addEventListener("click", () => { void this.handleAccept(path, true); });
 			}
+			if (section.diff.missing && !section.diff.deleted) {
+				const discard = actions.createEl("button", {text: "Discard review"});
+				discard.addEventListener("click", () => new ConfirmActionModal(this.app, "Discard missing-file review?", "This removes the saved comparison and draft. It does not change files.", "Discard review", () => { void this.keepDeletion(path, section); }).open());
+			}
 			this.updateReviewStatus(path);
 			acceptBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleAccept(path); });
 			rejectBtn.addEventListener("click", (e) => { e.stopPropagation(); void this.handleReject(path); });
 
-			if (section.diff.deleted && (this.settings.trackFileRenames || section.diff.renameCandidates?.length)) {
-				const suggestions = block.createDiv({cls: "diff-view-rename-suggestions"});
-				if (section.diff.renameCandidates?.length) {
-					suggestions.createSpan({text: "Possible rename. Candidates, best match first:"});
-					for (const candidate of section.diff.renameCandidates) suggestions.createDiv({text: `${Math.floor(candidate.score * 100)}% similarity · ${candidate.path}`});
-				}
-				const choose = suggestions.createEl("button", {text: section.diff.renameCandidates?.length ? "Review candidates…" : "Select renamed file…"});
-				choose.addEventListener("click", () => section.diff.onFindRename?.());
-				if (section.diff.renameCandidates?.length) {
-					const separate = suggestions.createEl("button", {text: "Keep separate"});
-					separate.addEventListener("click", () => section.diff.onKeepSeparate?.());
-				}
-			} else if (section.diff.renameSources?.length) {
-				block.createDiv({cls: "diff-view-review-status", text: `Possible rename candidate for: ${section.diff.renameSources.join(", ")}. Resolve the missing-file review first.`});
+			section.suggestions = block.createDiv({cls: "diff-view-rename-suggestions"});
+			renderRenameSuggestions(section.suggestions, section.diff, this.settings.trackFileRenames);
+			const key = this.layoutKey(path, section.diff);
+			if (section.mergeContainer && section.layoutKey === key) block.appendChild(section.mergeContainer);
+			else {
+				this.destroyMergeView(section);
+				section.mergeContainer = block.createDiv({cls: "diff-view-merge cm-s-obsidian mod-cm6"});
 			}
-			section.mergeContainer = block.createDiv({cls: "diff-view-merge cm-s-obsidian mod-cm6"});
+			section.layoutKey = key;
 			this.setExpanded(path, section, section.expanded);
 		}
+		scrollArea.scrollTop = scrollTop;
+		if (focused && container.contains(focused)) focused.focus({preventScroll: true});
+	}
+
+	private layoutKey(path: string, diff: PendingDiff): string {
+		return JSON.stringify([path, diff.originalPath, diff.deleted, diff.deletionOnly, diff.created, renameOnly(diff)]);
+	}
+
+	private updateOmissions(): void {
+		const uncertain = [...this.sections.values()].filter(({diff}) => unresolvedRename(diff)).length;
+		const matching = this.matchingStatus?.() ?? "";
+		this.omissionStatus?.setText([uncertain ? `${uncertain} files awaiting rename decisions are excluded from bulk actions and export.` : "", matching].filter(Boolean).join(" "));
+		this.omissionStatus?.toggle(uncertain > 0 || !!matching);
 	}
 
 	private setExpanded(path: string, section: FileSection, expanded: boolean): void {
@@ -292,14 +321,8 @@ export class DiffView extends ItemView {
 		section.mergeContainer.empty();
 		section.displaysDeletion = !!(section.diff.deleted && section.diff.deletionOnly);
 		section.reviewControls = this.addChild(new ReviewControls(section.mergeContainer,
-			() => section.mergeView?.b, section.diff.onReviewLatest, value => {
-				section.diff.recreateMissingFile = value;
-				this.updateReviewStatus(path);
-			}));
-		if (section.diff.originalPath) {
-			section.reviewControls.setRename(section.diff.originalPath, !!section.diff.restoreOriginalPath,
-				value => { section.diff.restoreOriginalPath = value; }, !renameOnly(section.diff));
-		}
+			() => section.mergeView?.b, section.diff.onReviewLatest));
+		if (section.diff.originalPath) section.reviewControls.setRename(section.diff.originalPath);
 		if (renameOnly(section.diff)) {
 			section.mergeContainer.createDiv({text: "No content changes.", cls: "diff-view-review-status"});
 			this.updateReviewStatus(path);
@@ -421,24 +444,38 @@ export class DiffView extends ItemView {
 		}
 	}
 
+	private updateBulkCounts(): void {
+		this.toolbar?.setCounts(summarizeReviews([...this.sections.values()].map(section => section.diff)));
+	}
+
+	private confirmRestoreAll(): void {
+		const counts = summarizeReviews([...this.sections.values()].map(section => section.diff));
+		const approved = new Map([...this.sections].filter(([, section]) => !unresolvedRename(section.diff) && !(section.diff.conflicted && !section.diff.missing)).map(([path, section]) => [path, {diff: section.diff, decision: reviewDecision(section.diff)}]));
+		new ConfirmActionModal(this.app, "Restore originals?",
+			`Restore ${counts.restore} files to their original contents and paths. This includes ${counts.deleted} deleted files, ${counts.renamed} renames, and ${counts.created} new files to move to trash. ${counts.drafts} edited drafts will be discarded. ${counts.unresolved + counts.conflicts} unresolved or unavailable reviews are excluded.`,
+			"Restore originals", () => { void this.handleRejectAll(approved); }).open();
+	}
+
 	/** Accept all files and close the diff view. */
 	private async handleAcceptAll(): Promise<void> {
 		let skipped = 0;
 		for (const [path, section] of [...this.sections]) {
-			if (unresolvedRename(section.diff) || section.diff.draftContent !== section.diff.newContent) { skipped++; continue; }
+			if (unresolvedRename(section.diff) || section.diff.draftContent !== section.diff.newContent || section.diff.missing && !section.diff.deleted || section.diff.conflicted) { skipped++; continue; }
 			await this.handleAccept(path);
 		}
-		if (skipped) new Notice(`${skipped} edited drafts or unresolved rename items kept open for individual review.`);
+		new Notice(`Keep current finished. ${skipped} drafts, missing files, or unresolved reviews skipped; ${this.sections.size} reviews remain open.`);
 	}
 
 	/** Reject all files and close the diff view. */
-	private async handleRejectAll(): Promise<void> {
+	private async handleRejectAll(approved?: Map<string, {diff: PendingDiff; decision: readonly unknown[]}>): Promise<void> {
 		let skipped = 0;
 		for (const [path, section] of [...this.sections]) {
-			if (unresolvedRename(section.diff)) { skipped++; continue; }
+			const expected = approved?.get(path);
+			if (approved && (!expected || expected.diff !== section.diff || expected.decision.some((value, index) => value !== reviewDecision(section.diff)[index]))) { skipped++; continue; }
+			if (unresolvedRename(section.diff) || section.diff.conflicted && !section.diff.missing) { skipped++; continue; }
 			await this.handleReject(path);
 		}
-		if (skipped) new Notice(`${skipped} unresolved rename items kept open.`);
+		new Notice(`Restoration finished. ${skipped} unresolved reviews skipped; ${this.sections.size} reviews remain open, including any failed operations.`);
 	}
 
 	/** Remove a resolved file and re-render or close if empty. */

@@ -3,7 +3,7 @@ import {EditorView, ViewUpdate} from "@codemirror/view";
 import {EditorState, Transaction, Extension} from "@codemirror/state";
 import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab} from "./settings";
 import {DiffView, DIFF_VIEW_TYPE, PendingDiff} from "./DiffView";
-import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent, renameOnly, unresolvedRename} from "./reviewDraft";
+import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent, unresolvedRename} from "./reviewDraft";
 import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
 import {formatExportFilename} from "./export/filename";
 import {validContextLines} from "./export/unifiedDiff";
@@ -58,7 +58,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings));
+		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings, () => this.renameMatcher?.status ?? ""));
 		this.registerView(EXPORT_TEXT_VIEW, leaf => new ExportTextView(leaf));
 
 		// CM6 detection: register updateListener on all editors
@@ -585,6 +585,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			onKeepDeletion: () => this.keepDeletion(diff.path!, diff),
 			onFindRename: () => new RenameReviewModal(this.app, diff.path!, diff, this.renameMatcher).open(),
 			onKeepSeparate: () => this.renameMatcher.keepSeparate(diff),
+			onResumeMatching: () => this.renameMatcher.resume(diff),
 			onDraftChange: content => {
 				diff.draftContent = content;
 				this.persistState();
@@ -614,11 +615,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.refreshMissingReviews();
 		const file = this.app.vault.getAbstractFileByPath(path);
 		if (unresolvedRename(diff)) { new Notice("Resolve the possible rename before applying this review."); return false; }
-		if (diff.missing && !diff.deleted && !diff.recreateMissingFile) {
-			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Names the exact recovery controls.
-			new Notice("File missing at the original path. Enable 'Recreate missing file', then Accept to save the result or Reject to restore the original. Enable deletion tracking to review future deletions explicitly.", 12000);
-			return false;
-		}
+
 		if (diff.conflicted && !diff.missing) {
 			new Notice("Review the latest file changes before applying this draft.");
 			return false;
@@ -636,7 +633,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.persistState();
 				return true;
 			}
-			const restorePath = diff.originalPath && (diff.restoreOriginalPath || (!accept && renameOnly(diff)));
+			const restorePath = diff.originalPath && !accept;
 			if (restorePath) {
 				const target = diff.originalPath!;
 				if (this.app.vault.getAbstractFileByPath(target)) throw new Error("The original path is occupied. Nothing was changed.");
@@ -644,7 +641,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				if (target.includes("/") && !this.app.vault.getAbstractFileByPath(parent)) throw new Error("The original folder is missing. Restore it before restoring the path.");
 			}
 			if (!(file instanceof TFile)) {
-				if (diff.deleted) await this.ensureParentFolders(path);
+				await this.ensureParentFolders(path);
 				// create refuses an occupied path, including files arriving during sync.
 				if (this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
 				await this.app.vault.create(path, content);
