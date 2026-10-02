@@ -123,6 +123,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	async loadSettings() {
 		const data: PersistedData = ((await this.loadData()) as PersistedData | null) ?? {};
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings ?? {});
+		this.settings.trackFileRenames = this.settings.trackFileDeletions = !!(this.settings.trackFileRenames || this.settings.trackFileDeletions);
 		try { formatExportFilename(this.settings.exportFilenameTemplate); }
 		catch { this.settings.exportFilenameTemplate = DEFAULT_SETTINGS.exportFilenameTemplate; }
 		if (!validContextLines(this.settings.exportContextLines)) this.settings.exportContextLines = 3;
@@ -345,7 +346,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			// Ignore a read that finished after another replacement, rename, or review.
 			if (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
 				this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
-			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && !internal) {
+			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && (!internal || this.settings.trackApiChanges)) {
 				this.handleExternalChange(path, baseline, current);
 			} else if (previous) {
 				previous.deleted = false;
@@ -370,7 +371,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			const pending = this.pendingDiffs.get(path);
 			if (pending) pending.matchContent = current;
 			this.baselines.set(path, current);
-			if (trackCreation && (!internal || this.settings.trackInAppChanges)) this.renameMatcher?.observe(path, current, true);
+			if (trackCreation && (!internal || this.settings.trackApiChanges)) this.renameMatcher?.observe(path, current, true);
 		} catch (error) {
 			console.error("Drift: could not read created file", error);
 		}
@@ -395,31 +396,23 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.internalWritePaths.set(file.path, Date.now());
 			}
 			const isSelfWrite = this.selfModifyPaths.delete(file.path);
-			if (!isSelfWrite && this.settings.trackInAppChanges) {
+			if (!isSelfWrite && this.settings.trackApiChanges) {
 				const before = this.baselines.get(file.path);
 				const current = await this.app.vault.cachedRead(file);
-				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current, true);
+				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
 				this.baselines.set(file.path, current);
 				return;
 			}
-			// In-app writes resolve untouched reviews, but edited drafts must
-			// survive and be checked against the new disk version. The plugin's
-			// own accept/reject writes manage pendingDiffs themselves.
-			if (!isSelfWrite && this.pendingDiffs.has(file.path)) {
-				const pending = this.pendingDiffs.get(file.path)!;
-				if (pending.draftContent !== pending.newContent || pending.conflicted || pending.originalPath) {
-					pending.conflicted = true;
-					this.getExistingDiffView()?.updateReviewStatus(file.path);
-				} else {
-					this.pendingDiffs.delete(file.path);
-					this.getExistingDiffView()?.removeFile(file.path);
-					this.persistState();
-				}
-			}
+			// Ignoring an API write must not silently accept a previous external review.
 			const current = await this.app.vault.cachedRead(file);
 			this.baselines.set(file.path, current);
 			const pending = this.pendingDiffs.get(file.path);
-			if (pending) { pending.matchContent = current; this.persistState(); }
+			if (pending && !isSelfWrite) {
+				pending.conflicted = pending.newContent !== current;
+				pending.matchContent = current;
+				this.getExistingDiffView()?.updateReviewStatus(file.path);
+				this.persistState();
+			}
 			this.renameMatcher?.observe(file.path, current);
 			return;
 		}

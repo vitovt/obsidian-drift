@@ -40,7 +40,7 @@ export class FileLifecycle {
 			if (vault.getAbstractFileByPath(path) instanceof TFile) continue;
 			const previous = reviews.get(path);
 			const baseline = baselines.get(path);
-			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackInAppChanges) && (previous || baseline !== undefined)) {
+			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackApiChanges) && (previous || baseline !== undefined)) {
 				const diff = previous ?? this.host.make(path, baseline!, baseline!);
 				diff.matchContent ??= previous?.newContent ?? baseline;
 				diff.deletionOnly = previous ? !!previous.deletionOnly : true;
@@ -66,8 +66,8 @@ export class FileLifecycle {
 			baselines.delete(path);
 			baselines.set(destination(path), content);
 		}
-		if (settings.enabled && (settings.trackFileRenames || internal)) {
-			if ((!internal || settings.trackInAppChanges) && settings.trackFileRenames && file instanceof TFile && file.extension === "md" && !reviews.has(oldPath) && baseline !== undefined) {
+		if (reviews.size || settings.enabled && settings.trackFileRenames) {
+			if (settings.enabled && (!internal || settings.trackApiChanges) && settings.trackFileRenames && file instanceof TFile && file.extension === "md" && !reviews.has(oldPath) && baseline !== undefined) {
 				reviews.set(oldPath, this.host.make(oldPath, baseline, baseline));
 			}
 			// Rebuild keys in place order, keeping review objects and editor history.

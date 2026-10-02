@@ -6,6 +6,7 @@ import {addExportSettings} from "./export/settings";
 export interface ExternalDiffSettings {
 	enabled: boolean;
 	trackInAppChanges: boolean;
+	trackApiChanges: boolean;
 	trackFileRenames: boolean;
 	trackFileDeletions: boolean;
 	ignoreEmptyFileChanges: boolean;
@@ -21,6 +22,7 @@ export interface ExternalDiffSettings {
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	trackInAppChanges: false,
+	trackApiChanges: true,
 	trackFileRenames: false,
 	trackFileDeletions: false,
 	ignoreEmptyFileChanges: false,
@@ -56,9 +58,8 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				}));
 
 		for (const [key, name, description] of [
-			["trackInAppChanges", "Track in-app changes", "Include edits, renames, and deletions made through Obsidian and plugin file APIs. Existing reviews always follow confirmed moves."],
-			["trackFileRenames", "Track file renames (experimental)", "Retain missing-file reviews and suggest external renames by content similarity. Every suggested association requires confirmation."],
-			["trackFileDeletions", "Track file deletions (experimental)", "Review external deletions while Drift is running. In-app deletions require the separate in-app changes setting."],
+			["trackInAppChanges", "Review my typing", "Include edits made in the Obsidian editor. Your typing is ignored by default."],
+			["trackApiChanges", "Review plugin and file operations", "Include writes through Obsidian APIs, including connected AI tools, plugins, and in-app file operations. Their individual origins cannot always be distinguished."],
 		] as const) {
 			new Setting(containerEl).setName(name).setDesc(description)
 				.addToggle(toggle => toggle.setValue(this.plugin.settings[key]).onChange(async value => {
@@ -66,6 +67,14 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 		}
+
+		new Setting(containerEl)
+			.setName("Track renames and deletions (experimental)")
+			.setDesc("Review missing files and suggest possible renames. Existing reviews and drafts remain available when disabled.")
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.trackFileRenames).onChange(async value => {
+				this.plugin.settings.trackFileRenames = this.plugin.settings.trackFileDeletions = value;
+				await this.plugin.saveSettings();
+			}));
 
 		new Setting(containerEl)
 			.setName("Ignore changes to empty files")

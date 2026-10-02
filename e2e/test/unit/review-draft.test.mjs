@@ -495,13 +495,13 @@ test('internal renames follow existing reviews but create none by default', () =
   assert.equal(plugin.pendingDiffs.size, 0);
 });
 
-test('internal deletions are opt-in while external deletions remain tracked', async () => {
-  for (const trackInAppChanges of [false, true]) {
+test('API deletion reviews obey their independent setting', async () => {
+  for (const trackApiChanges of [false, true]) {
     const {plugin, lifecycle, files, file} = lifecycleSetup();
-    plugin.settings.trackInAppChanges = trackInAppChanges;
+    plugin.settings.trackApiChanges = trackApiChanges;
     plugin.pendingDiffs.clear(); files.clear(); lifecycle.deleted(file, true);
     await new Promise(resolve => setTimeout(resolve, 550));
-    assert.equal(plugin.pendingDiffs.size, trackInAppChanges ? 1 : 0);
+    assert.equal(plugin.pendingDiffs.size, trackApiChanges ? 1 : 0);
     lifecycle.dispose();
   }
 });
@@ -750,4 +750,27 @@ test('matching visits older pending sources beyond one bounded batch', async () 
     assert.equal(oldest.renameCandidates[0].path, 'moved.md');
     assert.ok(matcher.sources.size <= 128);
   } finally { matcher.dispose(); }
+});
+
+test('ignored API writes preserve an existing external review', async () => {
+  const {plugin, diff, file, io} = setup();
+  file.saving = true; io.disk = 'plugin changed it again';
+  plugin.app.vault.cachedRead = async () => io.disk;
+  await plugin.handleModify(file);
+  assert.equal(plugin.pendingDiffs.get(file.path), diff);
+  assert.equal(diff.oldContent, 'original');
+  assert.equal(diff.conflicted, true);
+});
+
+test('API review is independent of typing review', async () => {
+  const {plugin, file, io} = setup();
+  plugin.settings.trackApiChanges = true;
+  plugin.settings.trackInAppChanges = false;
+  plugin.ensureDiffTab = async () => ({addFile() {}});
+  plugin.baselines.set(file.path, 'original');
+  file.saving = true; io.disk = 'AI API write';
+  plugin.app.vault.cachedRead = async () => io.disk;
+  await plugin.handleModify(file);
+  assert.equal(plugin.pendingDiffs.get(file.path).newContent, 'AI API write');
+  assert.equal(plugin.pendingDiffs.get(file.path).internalReview, false);
 });
