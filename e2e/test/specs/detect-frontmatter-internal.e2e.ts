@@ -2,6 +2,7 @@ import ObsidianApp from "../pageobjects/ObsidianApp";
 
 describe("External change detection", () => {
   it("should NOT open diff tab for frontmatter changes via the app API", async () => {
+    await ObsidianApp.setReviewSettings({trackApiChanges: false});
     await ObsidianApp.createNewNote("---\nstatus: todo\n---\nBody text");
     const filePath = await ObsidianApp.getActiveFilePath();
 

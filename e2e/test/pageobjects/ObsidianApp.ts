@@ -3,10 +3,19 @@ import * as path from "node:path";
 import { browser, $ } from "@wdio/globals";
 import { App } from "obsidian";
 
-const TEST_VAULT_DIR = `.e2e_test_vault_${process.pid}`;
+const TEST_VAULT_DIR = path.resolve(`.e2e_test_vault_${process.pid}`);
 const PLUGIN_ID = "drift";
 
 class ObsidianApp {
+  async setReviewSettings(settings: Record<string, boolean>) {
+    await browser.execute(async (values: Record<string, boolean>) => {
+      // @ts-expect-error Obsidian application global
+      const plugin = app.plugins.plugins.drift;
+      Object.assign(plugin.settings, values);
+      await plugin.saveSettings();
+    }, settings);
+  }
+
   /** Removes the test vault directory if it exists from previous test runs. */
   async removeE2eTestVaultIfExists() {
     await fs.rm(TEST_VAULT_DIR, { force: true, recursive: true });
@@ -28,7 +37,7 @@ class ObsidianApp {
     await fs.copyFile("../styles.css", `${targetPluginsDir}/styles.css`);
 
     await this.switchToMainWindow();
-    await this.closeModal("Trust vault modal");
+
   }
 
   /** Switches browser context to the main Obsidian window. */
@@ -43,18 +52,33 @@ class ObsidianApp {
 
   /** Enables a plugin by ID. */
   private async activatePlugin(pluginId: string) {
-    await browser.execute((id: string) => {
-      // @ts-expect-error 'app' exists in Obsidian
-      declare const app: App;
-      app.plugins.setEnable(true);
-      app.plugins.enablePlugin(id);
+    await browser.execute(async () => {
+      // @ts-expect-error Obsidian global
+      await app.plugins.setEnable(true);
+    });
+    const trust = $("button=Trust author and enable plugins");
+    try { await trust.waitForDisplayed({timeout: 3000}); }
+    catch { /* Older versions do not show a trust prompt here. */ }
+    if (await trust.isExisting()) {
+      await trust.click();
+      await trust.waitForExist({reverse: true});
+    }
+    await browser.execute(async (id: string) => {
+      // @ts-expect-error Obsidian global
+      await app.plugins.loadManifests();
+      // @ts-expect-error Obsidian global
+      await app.plugins.enablePluginAndSave(id);
     }, pluginId);
+    await browser.waitUntil(async () => browser.execute((id: string) => {
+      // @ts-expect-error Obsidian global
+      return !!app.plugins.plugins[id]?.baselineReady;
+    }, pluginId), {timeout: 15000});
   }
 
   /** Closes the currently active modal. */
   async closeModal(modalName: string) {
     console.log(`Closing '${modalName}'`);
-    await $(".modal-close-button").click();
+    if (await $(".modal-close-button").isExisting()) await $(".modal-close-button").click();
   }
 
   /** Creates a new note with optional content, then waits for vault to settle. */
@@ -190,6 +214,16 @@ class ObsidianApp {
   async modifyFileExternally(filePath: string, content: string) {
     const fullPath = path.join(TEST_VAULT_DIR, filePath);
     await fs.writeFile(fullPath, content, "utf-8");
+  }
+
+  async renameFileExternally(from: string, to: string) {
+    await fs.rename(path.join(TEST_VAULT_DIR, from), path.join(TEST_VAULT_DIR, to));
+  }
+
+  async replaceFileExternally(filePath: string, content: string) {
+    const fullPath = path.join(TEST_VAULT_DIR, filePath);
+    await fs.unlink(fullPath);
+    await fs.writeFile(fullPath, content, "utf8");
   }
 
   /** Reveals and focuses the diff tab — its DOM is hidden while it sits in a background tab, so WebDriver can't click it. */
