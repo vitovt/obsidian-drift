@@ -211,7 +211,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		for (const entry of entries) {
 			const file = this.app.vault.getAbstractFileByPath(entry.path);
 			if (!(file instanceof TFile)) {
-				if (entry.deleted || entry.originalPath) {
+				if (entry.deleted || entry.originalPath || entry.draftContent !== undefined && entry.draftContent !== entry.newContent) {
 					const diff = Object.assign(this.makeDiffCallbacks(entry.path, entry.oldContent, entry.newContent), entry);
 					diff.draftContent = entry.draftContent ?? entry.newContent;
 					diff.missing = true;
@@ -339,12 +339,15 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.refreshMissingReviews();
 		if (!(file instanceof TFile) || file.extension !== "md") return;
 		const previous = this.pendingDiffs.get(path);
+		const baseline = this.baselines.get(path);
 		try {
 			const current = await this.app.vault.read(file);
 			// Ignore a read that finished after another replacement, rename, or review.
 			if (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
 				this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
-			if (previous) {
+			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && !internal) {
+				this.handleExternalChange(path, baseline, current);
+			} else if (previous) {
 				previous.deleted = false;
 				previous.deletionOnly = false;
 				previous.missing = false;

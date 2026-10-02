@@ -713,3 +713,29 @@ test('rename confirmation explains missing preview and remains retryable after e
   assert.equal(attempts, 2);
   assert.equal(closed, true);
 });
+
+test('replacement saves compare against the previous baseline', async () => {
+  const {plugin, lifecycle, files, file, io} = lifecycleSetup();
+  plugin.pendingDiffs.clear();
+  plugin.ensureDiffTab = async () => ({addFile() {}});
+  files.delete(file.path); lifecycle.deleted(file);
+  const replacement = new TFile(file.path);
+  files.set(file.path, replacement); io.disk = 'replacement content';
+  await plugin.handleCreate(replacement);
+  lifecycle.flushDeletions(); lifecycle.dispose();
+  assert.equal(plugin.pendingDiffs.get(file.path).oldContent, 'original');
+  assert.equal(plugin.pendingDiffs.get(file.path).newContent, 'replacement content');
+});
+
+test('missing content reviews preserve edited drafts across restart', async () => {
+  const {plugin, diff} = setup();
+  diff.draftContent = 'precious edited draft';
+  const saved = plugin.serializePendingDiffs();
+  plugin.pendingDiffs.clear();
+  plugin.app.vault.getAbstractFileByPath = () => null;
+  await plugin.restorePendingDiffs(saved);
+  const restored = plugin.pendingDiffs.get('note.md');
+  assert.equal(restored.draftContent, 'precious edited draft');
+  assert.equal(restored.missing, true);
+  assert.equal(restored.recreateMissingFile, undefined);
+});
