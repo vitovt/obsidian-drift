@@ -384,3 +384,22 @@ body:has(.diff-view-filepath:hover) .tooltip {
 .diff-view-rename-suggestions:empty {
 	display: none;
 }
+
+.diff-rename-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.diff-rename-preview {
+	flex: 1 1 auto;
+	min-height: 80px;
+	overflow: auto;
+}
+
+.diff-rename-footer {
+	flex-shrink: 0;
+	position: sticky;
+	bottom: 0;
+	background: var(--background-primary);
+}

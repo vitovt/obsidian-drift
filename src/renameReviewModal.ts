@@ -46,9 +46,10 @@ export class RenameReviewModal extends Modal {
 			.addButton(button => button.setButtonText("Treat as separate files").onClick(() => { this.matcher.keepSeparate(this.diff); this.close(); }));
 		if (this.diff.draftContent !== this.diff.newContent) this.contentEl.createEl("p", {text: "Your edited result and undo history will be preserved. The preview compares the last known contents with the selected file."});
 		this.previewEl = this.contentEl.createDiv({cls: "diff-rename-preview"});
-		this.status = this.contentEl.createDiv({cls: "diff-rename-status", attr: {"aria-live": "polite"}});
+		const footer = this.contentEl.createDiv({cls: "diff-rename-footer"});
+		this.status = footer.createDiv({cls: "diff-rename-status", attr: {"aria-live": "polite"}});
 		this.status.setText("Preview a candidate before confirming the rename.");
-		new Setting(this.contentEl)
+		new Setting(footer)
 			.addButton(button => button.setButtonText("Cancel").onClick(() => this.close()))
 			.addButton(button => {
 				button.setButtonText("Confirm rename").setCta().onClick(() => { void this.confirm(); });
