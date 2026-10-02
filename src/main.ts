@@ -12,6 +12,7 @@ import {RenameReviewModal} from "./renameReviewModal";
 import {InternalOperations} from "./internalOperations";
 import {checkpoint, readCheckpoint} from "./checkpoint";
 import {markDeleted, markPresent} from "./reviewTransitions";
+import {CreationQueue} from "./creationQueue";
 import {ReviewOperations} from "./reviewOperations";
 import {FileLifecycle} from "./fileLifecycle";
 
@@ -56,6 +57,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private internalOperations: InternalOperations;
 	private restoringPath: string | null = null;
 	private reviewOperations?: ReviewOperations;
+	private creationQueue = new CreationQueue((file, internal) => this.handleCreate(file, internal, true));
 
 	private get operations(): ReviewOperations {
 		return this.reviewOperations ??= new ReviewOperations({
@@ -139,6 +141,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	onunload() {
 		this.disposed = true;
+		this.creationQueue.dispose();
 		if (this.saveTimer) {
 			activeWindow.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
@@ -179,6 +182,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		}
 		const restoredPaths = new Set(this.restoredDiffs.map(entry => entry.path));
 		await this.restorePendingDiffs(this.restoredDiffs);
+		if (this.disposed) return;
 		this.restoredDiffs = [];
 		if (this.settings.enabled && this.settings.reviewWhileClosed && this.savedBaselines !== undefined) {
 			for (const [path, text] of contents) {
@@ -401,7 +405,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	/** Reconcile the returning path without associating it with another filename. */
-	private handleCreate = async (file: TAbstractFile, origin?: boolean): Promise<void> => {
+	private handleCreate = async (file: TAbstractFile, origin?: boolean, settled = false): Promise<void> => {
 		const path = file.path;
 		const internal = origin ?? this.internalOperations?.isInternal(path) ?? false;
 		if (this.initializing) { this.startupEvents.push(() => { void this.handleCreate(file, internal); }); return; }
@@ -411,11 +415,12 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.refreshMissingReviews();
 		if (!(file instanceof TFile) || file.extension !== "md") return;
 		const previous = this.pendingDiffs.get(path);
-		const baseline = this.baselines.get(path);
+		const baseline = settled ? undefined : this.baselines.get(path);
+		if (!settled && trackCreation && !previous && baseline === undefined) { this.creationQueue.defer(file, internal); return; }
 		try {
 			const current = await this.app.vault.read(file);
 			// Ignore a read that finished after another replacement, rename, or review.
-			if (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
+			if (this.disposed || file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
 				this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
 			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && (!internal || this.settings.trackApiChanges)) {
 				this.handleExternalChange(path, baseline, current);
@@ -453,11 +458,16 @@ export default class ExternalDiffPlugin extends Plugin {
 	/** Handler for vault.on('modify') — classifies Vault-API writes as internal and catches external changes to files not open in any editor. */
 	private handleModify = async (file: TAbstractFile, origin?: boolean): Promise<void> => {
 		if (!(file instanceof TFile) || file.extension !== "md") return;
+		if (this.creationQueue.touch(file)) { this.selfModifyPaths.delete(file.path); return; }
+		const path = file.path;
+		const stillCurrent = () => !this.disposed && file.path === path && this.app.vault.getAbstractFileByPath(path) === file;
 		const internal = origin ?? !!(file as TFile & {saving?: boolean}).saving;
 		if (this.initializing) { this.startupEvents.push(() => { void this.handleModify(file, internal); }); return; }
 		if (this.disposed) return;
 		if (!this.settings.enabled) {
-			this.baselines.set(file.path, await this.app.vault.read(file));
+			const current = await this.app.vault.read(file);
+			if (!stillCurrent()) return;
+			this.baselines.set(path, current);
 			this.persistState();
 			return;
 		}
@@ -477,6 +487,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			}
 			const isSelfWrite = this.selfModifyPaths.delete(file.path);
 			const current = await this.app.vault.cachedRead(file);
+			if (!stillCurrent()) return;
 			if (!isSelfWrite && this.typingContents.get(file.path) === current) {
 				this.typingContents.delete(file.path);
 				this.baselines.set(file.path, current);
@@ -508,6 +519,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		if (this.isFileOpenInEditor(file.path)) return;
 
 		const newContent = await this.app.vault.read(file);
+		if (!stillCurrent()) return;
 		const oldContent = this.baselines.get(file.path);
 
 		if (oldContent === undefined) {

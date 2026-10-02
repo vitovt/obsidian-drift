@@ -780,6 +780,7 @@ test('external creation opens a review, persists, and rejects to trash', async (
   let trashed = false;
   plugin.app.fileManager = {trashFile: async () => { trashed = true; }};
   await plugin.handleCreate(file);
+  await plugin.creationQueue.flush(file.path);
   assert.equal(plugin.pendingDiffs.get(file.path).created, true);
   const saved = plugin.serializePendingDiffs(); plugin.pendingDiffs.clear();
   await plugin.restorePendingDiffs(saved);
@@ -919,6 +920,7 @@ test('new files establish a baseline by default, remain rename candidates, and l
     const source = deleted('old.md');
     const file = new TFile('copied.md'); files.set(file.path, file); contents.set(file.path, matchText);
     await plugin.handleCreate(file);
+    await plugin.creationQueue.flush(file.path);
     assert.equal(plugin.pendingDiffs.has(file.path), false);
     assert.equal(plugin.baselines.get(file.path), matchText);
     await matcher.refresh();
@@ -953,4 +955,20 @@ test('keep and restore labels and counts describe actual lifecycle effects', () 
   const counts = summarizeReviews([diff]);
   assert.equal(counts.keep, 0); assert.equal(counts.restore, 1);
   assert.equal(counts.conflicts, 0); assert.equal(counts.unavailable, 1);
+});
+
+test('initial copy create/modify events settle into one baseline, independently of empty-file setting', async () => {
+  const {plugin, file, io} = setup('');
+  plugin.pendingDiffs.clear(); plugin.baselineReady = true;
+  plugin.settings.reviewNewFiles = false; plugin.settings.ignoreEmptyFileChanges = false;
+  plugin.ensureDiffTab = async () => ({addFile() {}});
+  await plugin.handleCreate(file);
+  io.disk = 'initial copied content';
+  await plugin.handleModify(file);
+  await plugin.creationQueue.flush(file.path);
+  assert.equal(plugin.pendingDiffs.size, 0);
+  assert.equal(plugin.baselines.get(file.path), 'initial copied content');
+  io.disk = 'later edit'; await plugin.handleModify(file);
+  assert.equal(plugin.pendingDiffs.get(file.path).oldContent, 'initial copied content');
+  assert.equal(plugin.pendingDiffs.get(file.path).newContent, 'later edit');
 });
