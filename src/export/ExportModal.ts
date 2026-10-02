@@ -15,13 +15,14 @@ export class ExportModal extends Modal {
 	private date = new Date();
 	private patch = "";
 
-	constructor(app: App, private entries: ExportEntry[], private template: string, private context: number, private unicodePaths: boolean) {
+	constructor(app: App, private entries: ExportEntry[], private template: string, private context: number, private unicodePaths: boolean, private omitted = 0) {
 		super(app);
 	}
 
 	onOpen(): void {
 		this.lifetime.load();
 		this.titleEl.setText("Export diff");
+		if (this.omitted) this.contentEl.createEl("p", {text: `${this.omitted} unresolved rename items omitted. Resolve them in the viewer to include them.`});
 		this.contentEl.createEl("p", {text: `${this.entries.length} files · Original → Result · ${this.context} context lines`});
 		this.contentEl.createEl("p", {text: "Exports the current review snapshot to the vault root."});
 		new Setting(this.contentEl).setName("Filename").addText(text => {

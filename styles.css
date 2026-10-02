@@ -336,3 +336,27 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	color: var(--text-muted);
 	overflow-wrap: anywhere;
 }
+
+.diff-view-rename-suggestions {
+	padding: 8px 12px;
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+	border-inline-start: 2px solid var(--interactive-accent);
+}
+
+.diff-view-rename-suggestions button {
+	margin: 6px 6px 0 0;
+}
+
+.diff-view-section:has(.diff-view-section-header:not(.is-expanded)) .diff-view-rename-suggestions {
+	display: none;
+}
+
+.diff-rename-modal {
+	width: min(90vw, 1200px);
+}
+
+.diff-rename-preview .cm-scroller {
+	max-height: 45vh;
+	overflow: auto;
+}

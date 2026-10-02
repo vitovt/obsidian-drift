@@ -57,8 +57,8 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 
 		for (const [key, name, description] of [
 			["trackInAppChanges", "Track in-app changes", "Include edits, renames, and deletions made through Obsidian and plugin file APIs. Existing reviews always follow confirmed moves."],
-			["trackFileRenames", "Track file renames (experimental)", "Follow confirmed Obsidian rename events. Delete and create events are never matched. Folder renames update existing reviews only."],
-			["trackFileDeletions", "Track file deletions (experimental)", "Review deletions while Drift is running, including deletions in Obsidian. Restore files from their last known versions."],
+			["trackFileRenames", "Track file renames (experimental)", "Retain missing-file reviews and suggest external renames by content similarity. Every suggested association requires confirmation."],
+			["trackFileDeletions", "Track file deletions (experimental)", "Review external deletions while Drift is running. In-app deletions require the separate in-app changes setting."],
 		] as const) {
 			new Setting(containerEl).setName(name).setDesc(description)
 				.addToggle(toggle => toggle.setValue(this.plugin.settings[key]).onChange(async value => {

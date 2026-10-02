@@ -3,10 +3,12 @@ import {EditorView, ViewUpdate} from "@codemirror/view";
 import {EditorState, Transaction, Extension} from "@codemirror/state";
 import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab} from "./settings";
 import {DiffView, DIFF_VIEW_TYPE, PendingDiff} from "./DiffView";
-import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent, renameOnly} from "./reviewDraft";
+import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent, renameOnly, unresolvedRename} from "./reviewDraft";
 import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
 import {formatExportFilename} from "./export/filename";
 import {validContextLines} from "./export/unifiedDiff";
+import {RenameMatcher} from "./renameMatcher";
+import {RenameReviewModal} from "./renameReviewModal";
 import {InternalOperations} from "./internalOperations";
 import {FileLifecycle} from "./fileLifecycle";
 
@@ -39,6 +41,8 @@ export default class ExternalDiffPlugin extends Plugin {
 	private saveTimer: ReturnType<typeof activeWindow.setTimeout> | null = null;
 	private applying = new Set<string>();
 	private lifecycle: FileLifecycle;
+	private renameMatcher: RenameMatcher;
+	private baselineReady = false;
 	private internalOperations: InternalOperations;
 	private restoringPath: string | null = null;
 
@@ -55,10 +59,16 @@ export default class ExternalDiffPlugin extends Plugin {
 		// not open in any editor (CM6 handles files that are open)
 		this.registerEvent(this.app.vault.on("modify", this.handleModify));
 
+		this.renameMatcher = new RenameMatcher({vault: this.app.vault, settings: this.settings,
+			reviews: this.pendingDiffs, baselines: this.baselines, busy: path => this.applying.has(path),
+			changed: () => { this.persistState(); this.getExistingDiffView()?.syncFiles(this.pendingDiffs); },
+		});
+		this.register(() => this.renameMatcher.dispose());
 		this.lifecycle = new FileLifecycle({vault: this.app.vault, settings: this.settings,
 			baselines: this.baselines, reviews: this.pendingDiffs,
 			make: (path, original, result) => this.makeDiffCallbacks(path, original, result),
 			changed: () => {
+				this.renameMatcher.schedule();
 				this.refreshMissingReviews();
 				this.persistState();
 				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
@@ -120,6 +130,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	async saveSettings() {
+		this.renameMatcher?.schedule();
 		for (const leaf of this.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE)) {
 			if (leaf.view instanceof DiffView) leaf.view.updateSettings();
 		}
@@ -148,6 +159,8 @@ export default class ExternalDiffPlugin extends Plugin {
 				}
 			}
 		}
+		this.baselineReady = true;
+		await this.renameMatcher?.restore();
 	}
 
 	/** Mark a path as being modified by the plugin itself (suppresses detection). */
@@ -173,6 +186,11 @@ export default class ExternalDiffPlugin extends Plugin {
 			originalPath: diff.originalPath,
 			deleted: diff.deleted,
 			deletionOnly: diff.deletionOnly,
+			matchContent: diff.matchContent,
+			renameCandidates: diff.renameCandidates,
+			renameSources: diff.renameSources,
+			renameDismissed: diff.renameDismissed,
+			internalReview: diff.internalReview,
 		}));
 	}
 
@@ -207,6 +225,8 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (!snapshot) continue;
 			const diff = Object.assign(this.makeDiffCallbacks(entry.path, snapshot.oldContent, snapshot.newContent), snapshot);
 			diff.originalPath = entry.originalPath;
+			diff.renameSources = entry.renameSources;
+			diff.internalReview = entry.internalReview;
 			this.pendingDiffs.set(entry.path, diff);
 		}
 
@@ -226,6 +246,8 @@ export default class ExternalDiffPlugin extends Plugin {
 
 				const path = this.getPathForEditorState(tr.startState);
 				if (!path || !this.pendingDiffs.has(path)) return tr;
+				const pending = this.pendingDiffs.get(path)!;
+				if (pending.internalReview && pending.draftContent === pending.newContent && !pending.conflicted) return tr;
 				if (this.pendingEditWarning.has(path)) return [];
 
 				this.pendingEditWarning.add(path);
@@ -275,9 +297,10 @@ export default class ExternalDiffPlugin extends Plugin {
 						this.handleExternalChange(path, oldContent, newContent);
 					}
 				} else {
+					this.renameMatcher?.observe(path, update.state.doc.toString());
 					if (this.settings.trackInAppChanges) {
 						const previous = this.baselines.get(path);
-						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString());
+						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString(), true);
 					}
 					this.baselines.set(path, update.state.doc.toString());
 				}
@@ -310,6 +333,8 @@ export default class ExternalDiffPlugin extends Plugin {
 	/** Reconcile the returning path without associating it with another filename. */
 	private handleCreate = async (file: TAbstractFile): Promise<void> => {
 		const path = file.path;
+		const internal = this.internalOperations?.isInternal(path) ?? false;
+		const trackCreation = this.baselineReady;
 		if (this.applying.has(path)) return;
 		this.refreshMissingReviews();
 		if (!(file instanceof TFile) || file.extension !== "md") return;
@@ -339,7 +364,10 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.persistState();
 				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
 			}
+			const pending = this.pendingDiffs.get(path);
+			if (pending) pending.matchContent = current;
 			this.baselines.set(path, current);
+			if (trackCreation && (!internal || this.settings.trackInAppChanges)) this.renameMatcher?.observe(path, current, true);
 		} catch (error) {
 			console.error("Drift: could not read created file", error);
 		}
@@ -367,7 +395,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (!isSelfWrite && this.settings.trackInAppChanges) {
 				const before = this.baselines.get(file.path);
 				const current = await this.app.vault.cachedRead(file);
-				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
+				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current, true);
 				this.baselines.set(file.path, current);
 				return;
 			}
@@ -385,7 +413,11 @@ export default class ExternalDiffPlugin extends Plugin {
 					this.persistState();
 				}
 			}
-			this.baselines.set(file.path, await this.app.vault.cachedRead(file));
+			const current = await this.app.vault.cachedRead(file);
+			this.baselines.set(file.path, current);
+			const pending = this.pendingDiffs.get(file.path);
+			if (pending) { pending.matchContent = current; this.persistState(); }
+			this.renameMatcher?.observe(file.path, current);
 			return;
 		}
 
@@ -481,6 +513,8 @@ export default class ExternalDiffPlugin extends Plugin {
 			onAccept: content => this.completeReview(diff.path!, diff, content, true),
 			onReject: () => this.completeReview(diff.path!, diff, diff.oldContent),
 			onKeepDeletion: () => this.keepDeletion(diff.path!, diff),
+			onFindRename: () => new RenameReviewModal(this.app, diff.path!, diff, this.renameMatcher).open(),
+			onKeepSeparate: () => this.renameMatcher.keepSeparate(diff),
 			onDraftChange: content => {
 				diff.draftContent = content;
 				this.persistState();
@@ -509,6 +543,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return false;
 		this.refreshMissingReviews();
 		const file = this.app.vault.getAbstractFileByPath(path);
+		if (unresolvedRename(diff)) { new Notice("Resolve the possible rename before applying this review."); return false; }
 		if (diff.missing && !diff.deleted && !diff.recreateMissingFile) {
 			// eslint-disable-next-line obsidianmd/ui/sentence-case -- Names the exact recovery controls.
 			new Notice("File missing at the original path. Enable 'Recreate missing file', then Accept to save the result or Reject to restore the original. Enable deletion tracking to review future deletions explicitly.", 12000);
@@ -599,6 +634,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	private keepDeletion(path: string, diff: PendingDiff): Promise<boolean> {
+		if (unresolvedRename(diff)) { new Notice("Resolve the possible rename first."); return Promise.resolve(false); }
 		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return Promise.resolve(false);
 		if (this.app.vault.getAbstractFileByPath(path)) {
 			this.refreshMissingReviews();
@@ -621,6 +657,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (this.pendingDiffs.get(path) !== previous) return;
 			const diff = this.makeDiffCallbacks(path, current, current);
 			diff.draftContent = previous.draftContent;
+			diff.renameSources = previous.renameSources;
 			diff.originalPath = previous.originalPath;
 			this.pendingDiffs.set(path, diff);
 			this.getExistingDiffView()?.addFile(path, diff);
@@ -632,8 +669,10 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	/** Handle an external file change, optionally focusing the diff tab. */
-	private handleExternalChange(path: string, oldContent: string, newContent: string): void {
+	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false): void {
+		this.renameMatcher?.observe(path, newContent);
 		const previous = this.pendingDiffs.get(path);
+		if (previous) previous.matchContent = newContent;
 		if (!previous && this.settings.ignoreEmptyFileChanges && oldContent === "") {
 			this.baselines.set(path, newContent);
 			return;
@@ -647,6 +686,9 @@ export default class ExternalDiffPlugin extends Plugin {
 		if (previous?.newContent === newContent) return;
 		const diff = this.makeDiffCallbacks(path, previous?.oldContent ?? oldContent, newContent);
 		diff.originalPath = previous?.originalPath;
+		diff.internalReview = internal;
+		diff.renameSources = previous?.renameSources ?? [...this.pendingDiffs].filter(([, review]) => review.renameCandidates?.some(candidate => candidate.path === path)).map(([source]) => source);
+		diff.matchContent = newContent;
 		this.pendingDiffs.set(path, diff);
 		this.persistState();
 

@@ -40,8 +40,9 @@ export class FileLifecycle {
 			if (vault.getAbstractFileByPath(path) instanceof TFile) continue;
 			const previous = reviews.get(path);
 			const baseline = baselines.get(path);
-			if (settings.enabled && settings.trackFileDeletions && (!internal || settings.trackInAppChanges) && (previous || baseline !== undefined)) {
+			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackInAppChanges) && (previous || baseline !== undefined)) {
 				const diff = previous ?? this.host.make(path, baseline!, baseline!);
+				diff.matchContent ??= previous?.newContent ?? baseline;
 				diff.deletionOnly = previous ? !!previous.deletionOnly : true;
 				diff.deleted = true;
 				diff.missing = true;

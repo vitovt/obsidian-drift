@@ -20,8 +20,8 @@ export class DiffToolbar extends Component {
 		if (multiple) {
 			const rejectButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-reject", text: "Reject all changes"});
 			const acceptButton = actions.createEl("button", {cls: "diff-view-btn diff-view-btn-accept", text: "Accept all changes"});
-			setTooltip(rejectButton, "Restore original contents and deleted files. Pure renames return to their original paths; other renames require the restore-path checkbox.");
-			setTooltip(acceptButton, "Keep current contents, renames, and deletions. Edited drafts remain open. Files change only when a restoration checkbox is selected.");
+			setTooltip(rejectButton, "Restore original contents and deleted files. Pure renames return to their original paths; other renames require the restore-path checkbox. Unresolved rename candidates are skipped.");
+			setTooltip(acceptButton, "Keep current contents, renames, and deletions. Edited drafts remain open. Files change only when a restoration checkbox is selected. Unresolved rename candidates are skipped.");
 			this.registerDomEvent(acceptButton, "click", accept);
 			this.registerDomEvent(rejectButton, "click", reject);
 		}

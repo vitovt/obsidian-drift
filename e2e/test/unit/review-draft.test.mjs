@@ -11,6 +11,7 @@ export class ItemView {}
 export class FileView {}
 export class FileSystemAdapter {}
 export class Modal {}
+export class FuzzySuggestModal {}
 export class PluginSettingTab {}
 export class Setting {}
 export class App {}
@@ -22,7 +23,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export * from './src/renameSimilarity'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -31,7 +32,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -503,4 +504,185 @@ test('internal deletions are opt-in while external deletions remain tracked', as
     assert.equal(plugin.pendingDiffs.size, trackInAppChanges ? 1 : 0);
     lifecycle.dispose();
   }
+});
+
+
+const matchText = Array.from({length: 100}, (_, i) => `Paragraph ${i}: the project records item_${i}, observations and decisions for later review.`).join('\n');
+function matcherSetup() {
+  const state = lifecycleSetup();
+  const {plugin, files, io} = state;
+  const contents = new Map();
+  plugin.app.vault.read = async file => contents.get(file.path) ?? io.disk;
+  const matcher = new RenameMatcher({vault: plugin.app.vault, settings: plugin.settings,
+    reviews: plugin.pendingDiffs, baselines: plugin.baselines, busy: path => plugin.applying.has(path), changed() {}});
+  plugin.renameMatcher = matcher;
+  const deleted = (path, text = matchText) => {
+    files.delete(path);
+    const diff = plugin.makeDiffCallbacks(path, text, text);
+    diff.deleted = true; diff.deletionOnly = true; diff.matchContent = text;
+    plugin.pendingDiffs.set(path, diff); return diff;
+  };
+  const created = (path, text = matchText) => {
+    files.set(path, new TFile(path)); contents.set(path, text); matcher.observe(path, text, true);
+  };
+  plugin.pendingDiffs.clear(); files.clear();
+  return {...state, matcher, contents, deleted, created};
+}
+
+test('fingerprints tolerate small edits and reflow, but reject empty and unrelated text', () => {
+  const original = fingerprint(matchText);
+  assert.equal(similarity(original, fingerprint(matchText)), 1);
+  assert.ok(similarity(original, fingerprint(matchText.replace('item_50', 'updated_item'))) > .9);
+  assert.ok(similarity(original, fingerprint(matchText.replaceAll('\n', ' '))) > .99);
+  assert.equal(fingerprint('   '), null);
+  assert.equal(fingerprint('x'.repeat(256 * 1024 + 1)), null);
+  assert.equal(similarity(fingerprint('short note'), fingerprint('short changed note')), 0);
+  assert.ok(similarity(original, fingerprint('Completely unrelated vocabulary '.repeat(200))) < .8);
+});
+
+test('rename candidates are ordered by similarity and support either event order', async () => {
+  for (const creationFirst of [false, true]) {
+    const {matcher, deleted, created} = matcherSetup();
+    try {
+      let diff;
+      if (!creationFirst) diff = deleted('old.md');
+      created('changed.md', matchText.replaceAll('item_50', 'replacement'));
+      created('exact.md');
+      if (creationFirst) diff = deleted('old.md');
+      await matcher.refresh();
+      assert.deepEqual(diff.renameCandidates.map(c => c.path), ['exact.md', 'changed.md']);
+      assert.equal(diff.renameCandidates[0].score, 1);
+      assert.ok(diff.renameCandidates[1].score > .9);
+      assert.equal(diff.path, 'old.md'); // Suggestions never associate automatically.
+    } finally { matcher.dispose(); }
+  }
+});
+
+test('ambiguous identical notes remain separate candidates until selected', async () => {
+  const {matcher, deleted, created, plugin, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('a.md'); created('b.md');
+    await matcher.refresh();
+    assert.deepEqual(diff.renameCandidates.map(c => c.path), ['a.md', 'b.md']);
+    assert.equal(plugin.pendingDiffs.has('old.md'), true);
+    assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); }
+});
+
+test('unresolved deletions can match files delivered much later', async () => {
+  const {matcher, deleted, created} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); await matcher.refresh();
+    assert.deepEqual(diff.renameCandidates, []);
+    // There is no short source-expiry window for a pending deletion review.
+    created('arrived-later.md', matchText.replace('item_42', 'edited_item'));
+    await matcher.refresh();
+    assert.equal(diff.renameCandidates[0].path, 'arrived-later.md');
+  } finally { matcher.dispose(); }
+});
+
+test('confirming a changed rename preserves Original and writes no files', async () => {
+  const {matcher, deleted, created, plugin, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); const current = matchText.replace('item_42', 'edited_item');
+    created('new.md', current); await matcher.refresh();
+    await matcher.confirm('old.md', diff, 'new.md', current);
+    assert.equal(plugin.pendingDiffs.has('old.md'), false);
+    assert.equal(plugin.pendingDiffs.get('new.md'), diff);
+    assert.equal(diff.originalPath, 'old.md'); assert.equal(diff.oldContent, matchText);
+    assert.equal(diff.draftContent, current); assert.equal(diff.deleted, false);
+    assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); }
+});
+
+test('confirming a rename preserves an edited draft and session history', async () => {
+  const {matcher, deleted, created, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); diff.draftContent = 'hand edited draft';
+    const state = diff.editorState = EditorState.create({doc: diff.draftContent, extensions: [history()]});
+    const current = matchText.replace('item_42', 'remote_edit');
+    created('new.md', current); await matcher.refresh();
+    await matcher.confirm('old.md', diff, 'new.md', current);
+    assert.equal(diff.draftContent, 'hand edited draft'); assert.equal(diff.editorState, state);
+    assert.equal(diff.conflicted, true); assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); }
+});
+
+test('confirmation rechecks preview contents and refuses another edited review', async () => {
+  const {matcher, deleted, created, contents, plugin, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+    contents.set('new.md', 'changed after preview');
+    await assert.rejects(matcher.confirm('old.md', diff, 'new.md', matchText), /changed/);
+    contents.set('new.md', matchText);
+    const other = plugin.makeDiffCallbacks('new.md', 'initial', matchText);
+    other.draftContent = 'precious other draft'; plugin.pendingDiffs.set('new.md', other);
+    await assert.rejects(matcher.confirm('old.md', diff, 'new.md', matchText), /unfinished review/);
+    assert.equal(plugin.pendingDiffs.get('old.md'), diff); assert.equal(other.draftContent, 'precious other draft');
+    assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); }
+});
+
+test('bulk actions and export skip both sides of unresolved rename suggestions', async () => {
+  const {matcher, deleted, created, plugin, io} = matcherSetup();
+  try {
+    const source = deleted('old.md'); created('new.md');
+    const target = plugin.makeDiffCallbacks('new.md', 'initial', matchText);
+    plugin.pendingDiffs.set('new.md', target); await matcher.refresh();
+    assert.deepEqual(target.renameSources, ['old.md']);
+    const view = new DiffView({}, {});
+    view.sections.set('old.md', {diff: source, mergeView: null});
+    view.sections.set('new.md', {diff: target, mergeView: null});
+    view.removeFile = path => view.sections.delete(path);
+    await view.handleAcceptAll(); await view.handleRejectAll();
+    assert.equal(view.sections.size, 2); assert.equal(io.writes, 0);
+    assert.deepEqual(selectExportEntries(plugin.pendingDiffs), {entries: [], omitted: 2});
+    matcher.keepSeparate(source); await matcher.refresh();
+    assert.deepEqual(target.renameSources, []);
+    assert.equal(selectExportEntries(plugin.pendingDiffs).entries.length, 2);
+  } finally { matcher.dispose(); }
+});
+
+test('saved uncertain matches stay excluded after restart and revalidate selected paths', async () => {
+  const {matcher, deleted, created, plugin} = matcherSetup();
+  try {
+    deleted('old.md'); created('new.md'); await matcher.refresh();
+    const saved = plugin.serializePendingDiffs();
+    plugin.pendingDiffs.clear(); await plugin.restorePendingDiffs(saved);
+    assert.equal(selectExportEntries(plugin.pendingDiffs).omitted, 1);
+    await matcher.restore(); await matcher.refresh();
+    assert.equal(plugin.pendingDiffs.get('old.md').renameCandidates[0].path, 'new.md');
+  } finally { matcher.dispose(); }
+});
+
+test('candidate collection is bounded during bulk creation', () => {
+  const {matcher, created} = matcherSetup();
+  try {
+    for (let i = 0; i < 200; i++) created(`file-${i}.md`, `Nonempty note ${i}`);
+    assert.equal(matcher.created.size, 128);
+    assert.equal(matcher.created.has('file-0.md'), false);
+  } finally { matcher.dispose(); }
+});
+
+
+test('empty creation remains eligible when an external editor fills it later', async () => {
+  const {matcher, deleted, created, contents} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md', '');
+    await matcher.refresh(); assert.deepEqual(diff.renameCandidates, []);
+    contents.set('new.md', matchText); matcher.observe('new.md', matchText);
+    await matcher.refresh(); assert.equal(diff.renameCandidates[0].path, 'new.md');
+  } finally { matcher.dispose(); }
+});
+
+test('disabling matching preserves unresolved suggestions and bulk exclusions', async () => {
+  const {matcher, deleted, created, plugin} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+    plugin.settings.trackFileRenames = false; await matcher.refresh();
+    assert.equal(diff.renameCandidates[0].path, 'new.md');
+    assert.equal(selectExportEntries(plugin.pendingDiffs).omitted, 1);
+    matcher.keepSeparate(diff); await matcher.refresh();
+    assert.equal(selectExportEntries(plugin.pendingDiffs).omitted, 0);
+  } finally { matcher.dispose(); }
 });
