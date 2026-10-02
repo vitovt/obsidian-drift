@@ -57,7 +57,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 			if (description) heading.setDesc(description);
 			return group;
 		};
-		const sources = section("Change sources", "External editors, scripts, and sync tools that write directly to Markdown files are monitored when detection is enabled. The options below control additional sources and checks at startup.");
+		const sources = section("Change sources");
 
 		new Setting(sources)
 			.setName("Enable change detection")
@@ -68,6 +68,10 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					this.plugin.settings.enabled = value;
 					await this.plugin.saveSettings();
 				}));
+
+		new Setting(sources)
+			.setName("Changes outside Obsidian — always included")
+			.setDesc("Drift's main purpose: review Markdown file changes made by external editors, AI agents, scripts, and sync tools such as Dropbox. Always monitored while change detection is enabled; no separate switch is needed. New files, renames, and deletions follow the file options below.");
 
 		for (const [key, name, description] of [
 			["trackInAppChanges", "Review editor changes", "Include typing, pasting, and changes made by plugins through the editor, such as automatic link-title formatting. Drift cannot reliably separate your edits from plugin edits in the editor. Off by default."],
