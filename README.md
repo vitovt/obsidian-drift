@@ -8,11 +8,11 @@ Review changes to Markdown notes in one place inside Obsidian. Drift compares th
 
 | Setting | Default | Behavior |
 | --- | --- | --- |
-| Enable external change detection | On | Review changes to known Markdown files. |
+| Enable change detection | On | Review changes to known Markdown files. |
 | Review newly created files | **Off** | New files establish a baseline and remain eligible for rename matching. Later edits are reviewed. Enable to review the initial creation too. |
 | Ignore changes to empty files | Off | When enabled, the first content written to a zero-character file becomes its baseline. Whitespace is not empty. Existing reviews are preserved. This is independent of reviewing new files. |
-| Review my typing | Off | Include edits made in the Obsidian editor. Ordinary typing and its autosaves are otherwise excluded. |
-| Review plugin and file operations | On | Include writes through Obsidian APIs, including connected AI tools, plugins, and in-app file operations. |
+| Review editor changes | Off | Include typing, pasting, and plugin changes made through the editor, such as link-title formatting. These sources cannot reliably be separated. |
+| Review file API operations | On | Include operations through Obsidian file APIs, from plugins, integrations, or Obsidian itself. Plugins using the editor instead follow **Review editor changes**. |
 | Review changes made while closed | On | Store local Markdown content checkpoints and compare them during the next startup. |
 | Track renames and deletions (experimental) | Off | Review missing files and suggest possible renames. |
 
@@ -22,7 +22,7 @@ For example, with the defaults, copying `notes.md` into the vault creates **no r
 
 Origin detection uses editor transactions and file APIs. It cannot reliably identify every tool or distinguish an Obsidian file operation from a plugin using the same API. Unknown filesystem writes are treated as external. Disabling API review does not dismiss an existing external review: a later API write can instead mark it as needing a fresh comparison. An AI tool writing through an Obsidian API is covered by API review; one writing directly to disk is covered by external detection.
 
-Plugins that change text through the editor, such as automatic link-title formatting, currently follow **Review my typing**. Drift recognizes recent editor versions when delayed autosaves arrive, so an earlier URL save does not become a reverse review after the editor has already formatted the link. This matching is bounded to 64 versions and 8 Mi characters across files, with a 10-second lifetime; it does not identify the plugin responsible.
+Plugins that change text through the editor, such as automatic link-title formatting, currently follow **Review editor changes**. Drift recognizes recent editor versions when delayed autosaves arrive, so an earlier URL save does not become a reverse review after the editor has already formatted the link. This matching is bounded to 64 versions and 8 Mi characters across files, with a 10-second lifetime; it does not identify the plugin responsible.
 
 The first run establishes the checkpoint; it cannot recover changes made before installation. With checkpoints enabled, subsequent startup compares the current vault against the last saved observations, including changes delivered by Dropbox while Obsidian was closed. It reuses the startup Markdown scan, with four concurrent reads. Read failures keep the previous checkpoint and saved drafts and show a retry notice. There is no additional filesystem watcher or continuous polling.
 

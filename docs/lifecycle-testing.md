@@ -20,8 +20,8 @@ Use a disposable vault. Run `npm run build`, copy `main.js`, `manifest.json`, an
 
 ## Origins
 
-1. With **Review my typing** off, type and wait for autosave: no new review.
-2. With **Review plugin and file operations** on, write via `vault.modify`, frontmatter APIs, or a connected AI tool: expect review for both open and closed notes.
+1. With **Review editor changes** off, type and wait for autosave: no new review.
+2. With **Review file API operations** on, write via `vault.modify`, frontmatter APIs, or a connected AI tool: expect review for both open and closed notes.
 3. Turn API review off and repeat: no new review. If an external review already existed, the API write must not silently dismiss it.
 4. Enable typing review: typing should be included without repeated edit-warning prompts for an untouched typing review.
 5. Recognized moves must keep existing reviews usable even with detection or lifecycle creation disabled. API-origin classification includes in-app file operations; test this separately from typing.

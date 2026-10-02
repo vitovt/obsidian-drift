@@ -26,7 +26,7 @@ Failed UI tests save `/tmp/drift-e2e-failure.png`. The lifecycle test also captu
 
 Use `markAsSelfModify()` before `vault.modify()` only when creating fixture contents that should not themselves be reviewed. Use an unmarked Vault API write when testing plugin/API detection. Use Node filesystem writes and renames when testing external events. Simulate editor typing with a CodeMirror transaction when testing typing and autosaves.
 
-**Review plugin and file operations** is on by default; tests expecting ignored plugin writes must explicitly disable `trackApiChanges`. Ignoring an API write does not implicitly accept an existing external review. **Review newly created files** is off by default; creations still establish baselines and feed rename matching.
+**Review file API operations** is on by default; tests expecting ignored plugin writes must explicitly disable `trackApiChanges`. Ignoring an API write does not implicitly accept an existing external review. **Review newly created files** is off by default; creations still establish baselines and feed rename matching.
 
 Unit tests resolve CodeMirror from the root package to avoid loading conflicting state/history instances after installing the separate end-to-end dependencies.
 
