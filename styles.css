@@ -360,3 +360,12 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	max-height: 45vh;
 	overflow: auto;
 }
+
+.diff-rename-status {
+	margin-top: 8px;
+	margin-bottom: 8px;
+}
+
+.diff-rename-status.is-error {
+	color: var(--text-error);
+}

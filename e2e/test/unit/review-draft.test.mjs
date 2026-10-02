@@ -23,7 +23,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export * from './src/renameSimilarity'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -32,7 +32,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -685,4 +685,31 @@ test('disabling matching preserves unresolved suggestions and bulk exclusions', 
     matcher.keepSeparate(diff); await matcher.refresh();
     assert.equal(selectExportEntries(plugin.pendingDiffs).omitted, 0);
   } finally { matcher.dispose(); }
+});
+
+test('rename confirmation explains missing preview and remains retryable after errors', async () => {
+  const modal = Object.create(RenameReviewModal.prototype);
+  modal.confirmButton = {disabled: false};
+  let message = '';
+  modal.status = {addClass() {}, setText(value) { message = value; }};
+  modal.path = 'old.md'; modal.diff = {deleted: true}; modal.closed = false;
+  let attempts = 0; let closed = false;
+  modal.matcher = {async confirm() { attempts++; throw new Error('The files changed. Open a new preview before confirming.'); }};
+  modal.close = () => { closed = true; };
+
+  await modal.confirm();
+  assert.match(message, /Preview a candidate/);
+  assert.equal(modal.confirmButton.disabled, false);
+
+  modal.selected = {path: 'new.md', content: 'preview'};
+  await modal.confirm();
+  assert.match(message, /files changed/);
+  assert.equal(modal.confirmButton.disabled, false);
+  assert.equal(attempts, 1);
+  assert.equal(closed, false);
+
+  modal.matcher.confirm = async () => { attempts++; };
+  await modal.confirm();
+  assert.equal(attempts, 2);
+  assert.equal(closed, true);
 });

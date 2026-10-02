@@ -46,14 +46,16 @@ export class RenameReviewModal extends Modal {
 			.addButton(button => button.setButtonText("Keep separate").onClick(() => { this.matcher.keepSeparate(this.diff); this.close(); }));
 		// eslint-disable-next-line obsidianmd/ui/sentence-case -- Original is the literal comparison label.
 		if (this.diff.draftContent !== this.diff.newContent) this.contentEl.createEl("p", {text: "Your edited result and undo history will be preserved. The preview compares Original with the selected file."});
-		this.status = this.contentEl.createDiv({attr: {"aria-live": "polite"}});
 		this.previewEl = this.contentEl.createDiv({cls: "diff-rename-preview"});
+		this.status = this.contentEl.createDiv({cls: "diff-rename-status", attr: {"aria-live": "polite"}});
+		this.status.setText("Preview a candidate before confirming the rename.");
 		new Setting(this.contentEl)
 			.addButton(button => button.setButtonText("Cancel").onClick(() => this.close()))
 			.addButton(button => {
-				button.setButtonText("Confirm rename").setCta().setDisabled(true).onClick(() => { void this.confirm(); });
+				button.setButtonText("Confirm rename").setCta().onClick(() => { void this.confirm(); });
 				this.confirmButton = button.buttonEl;
 			});
+		if (candidates.length === 1) void this.select(candidates[0]!.path);
 	}
 
 	private async select(path: string): Promise<void> {
@@ -62,6 +64,7 @@ export class RenameReviewModal extends Modal {
 		this.confirmButton.disabled = true;
 		this.preview?.destroy(); this.preview = undefined;
 		this.previewEl.empty();
+		this.status.removeClass("is-error");
 		this.status.setText("Loading preview…");
 		try {
 			const file = this.app.vault.getAbstractFileByPath(path);
@@ -78,19 +81,31 @@ export class RenameReviewModal extends Modal {
 			this.selected = {path, content};
 			this.confirmButton.disabled = false;
 		} catch (error) {
-			if (!this.closed && generation === this.generation) this.status.setText(error instanceof Error ? error.message : "Could not load preview.");
+			if (!this.closed && generation === this.generation) this.showError(error, "Could not load preview.");
 		}
 	}
 
 	private async confirm(): Promise<void> {
-		if (!this.selected || this.confirmButton.disabled) return;
+		if (this.confirmButton.disabled) return;
+		if (!this.selected) {
+			this.showError("Preview a candidate before confirming the rename.", "Select a file first.");
+			return;
+		}
 		this.confirmButton.disabled = true;
 		try {
 			await this.matcher.confirm(this.path, this.diff, this.selected.path, this.selected.content);
 			this.close();
 		} catch (error) {
-			if (!this.closed) this.status.setText(error instanceof Error ? error.message : "Could not confirm rename.");
+			if (!this.closed) {
+				this.showError(error, "Could not confirm rename.");
+				this.confirmButton.disabled = false;
+			}
 		}
+	}
+
+	private showError(error: unknown, fallback: string): void {
+		this.status.addClass("is-error");
+		this.status.setText(error instanceof Error ? error.message : typeof error === "string" ? error : fallback);
 	}
 
 	onClose(): void {
