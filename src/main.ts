@@ -10,12 +10,14 @@ import {validContextLines} from "./export/unifiedDiff";
 import {RenameMatcher} from "./renameMatcher";
 import {RenameReviewModal} from "./renameReviewModal";
 import {InternalOperations} from "./internalOperations";
-import {markPresent} from "./reviewTransitions";
+import {checkpoint, readCheckpoint} from "./checkpoint";
+import {markDeleted, markPresent} from "./reviewTransitions";
 import {FileLifecycle} from "./fileLifecycle";
 
 interface PersistedData {
 	settings?: Partial<ExternalDiffSettings>;
 	pendingDiffs?: PersistedDiffEntry[];
+	baselines?: [string, string][];
 }
 
 /** How long an internal-write mark stays valid before the CM6 "set" it announces must have arrived. */
@@ -39,6 +41,11 @@ export default class ExternalDiffPlugin extends Plugin {
 	private typingContents = new Map<string, string>();
 	private internalWritePaths = new Map<string, number>();
 	private pendingEditWarning = new Set<string>();
+	private savedBaselines: [string, string][] | undefined;
+	private initializing = false;
+	private disposed = false;
+	private startupEvents: (() => void)[] = [];
+	private saveQueue: Promise<void> = Promise.resolve();
 	private restoredDiffs: PersistedDiffEntry[] = [];
 	private saveTimer: ReturnType<typeof activeWindow.setTimeout> | null = null;
 	private applying = new Set<string>();
@@ -85,10 +92,14 @@ export default class ExternalDiffPlugin extends Plugin {
 		// Baseline housekeeping
 		this.registerEvent(this.app.vault.on("create", this.handleCreate));
 		this.registerEvent(this.app.vault.on("delete", file => {
-			if (!this.applying.has(file.path)) this.lifecycle.deleted(file, this.internalOperations.isInternal(file.path));
+			const internal = this.internalOperations.isInternal(file.path);
+			const event = () => { if (!this.applying.has(file.path)) this.lifecycle.deleted(file, internal); };
+			if (this.initializing) this.startupEvents.push(event); else event();
 		}));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-			if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath, this.internalOperations.isInternal(oldPath));
+			const internal = this.internalOperations.isInternal(oldPath);
+			const event = () => { if (this.restoringPath !== oldPath) this.lifecycle.rename(file, oldPath, internal); };
+			if (this.initializing) this.startupEvents.push(event); else event();
 		}));
 
 		this.addCommand({
@@ -114,14 +125,12 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	onunload() {
+		this.disposed = true;
 		if (this.saveTimer) {
 			activeWindow.clearTimeout(this.saveTimer);
 			this.saveTimer = null;
 		}
-		void this.saveData({
-			settings: this.settings,
-			pendingDiffs: this.serializePendingDiffs(),
-		});
+		void this.saveState();
 	}
 
 	async loadSettings() {
@@ -132,6 +141,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		catch { this.settings.exportFilenameTemplate = DEFAULT_SETTINGS.exportFilenameTemplate; }
 		if (!validContextLines(this.settings.exportContextLines)) this.settings.exportContextLines = 3;
 		this.restoredDiffs = data.pendingDiffs ?? [];
+		this.savedBaselines = data.baselines;
 	}
 
 	async saveSettings() {
@@ -139,33 +149,66 @@ export default class ExternalDiffPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE)) {
 			if (leaf.view instanceof DiffView) leaf.view.updateSettings();
 		}
-		await this.saveData({
-			settings: this.settings,
-			pendingDiffs: this.serializePendingDiffs(),
-		});
+		await this.saveState();
 	}
 
-	/** Initialize baselines and restore persisted diffs after layout is ready. */
+	/** Reconcile the existing startup scan against the last observed local checkpoint. */
 	private async initializeBaselinesAndRestore(): Promise<void> {
-		const files = this.app.vault.getMarkdownFiles();
-		await Promise.all(files.map(async (file) => {
-			this.baselines.set(file.path, await this.app.vault.read(file));
-		}));
-		if (this.restoredDiffs.length > 0) {
-			await this.restorePendingDiffs(this.restoredDiffs);
-			this.restoredDiffs = [];
-			// Obsidian preserves workspace leaves across plugin reload, so the diff
-			// tab may already exist but be empty (deferred or new DiffView instance,
-			// no sections). Repopulate it with the restored diffs.
-			const existing = await this.resolveDiffView();
-			if (existing && existing.isEmpty()) {
-				for (const [path, diff] of this.pendingDiffs) {
-					existing.addFile(path, diff);
-				}
+		this.initializing = true;
+		const previous = new Map(this.savedBaselines);
+		const {contents, unavailable} = await readCheckpoint(this.app.vault);
+		if (this.disposed) return;
+		this.baselines.clear();
+		for (const [path, text] of contents) this.baselines.set(path, text);
+		for (const path of unavailable) {
+			const text = previous.get(path);
+			if (text !== undefined) this.baselines.set(path, text);
+		}
+		const restoredPaths = new Set(this.restoredDiffs.map(entry => entry.path));
+		await this.restorePendingDiffs(this.restoredDiffs);
+		this.restoredDiffs = [];
+		if (this.settings.enabled && this.settings.reviewWhileClosed && this.savedBaselines !== undefined) {
+			for (const [path, text] of contents) {
+				if (restoredPaths.has(path)) continue;
+				const before = previous.get(path);
+				if (before !== text) this.handleExternalChange(path, before ?? "", text, false, before === undefined);
+			}
+			for (const [path, text] of previous) {
+				if (contents.has(path) || unavailable.has(path)) continue;
+				const existing = this.pendingDiffs.get(path);
+				if (!existing && !this.settings.trackFileRenames) continue;
+				const diff = existing ?? this.makeDiffCallbacks(path, text, text);
+				markDeleted(diff, existing ? !!existing.deletionOnly : true);
+				this.pendingDiffs.set(path, diff);
+			}
+			for (const [path, text] of contents) {
+				if (!previous.has(path)) this.renameMatcher.observe(path, text, true);
 			}
 		}
 		this.baselineReady = true;
+		this.initializing = false;
+		for (const event of this.startupEvents.splice(0)) event();
+		if (this.pendingDiffs.size) {
+			const view = await this.ensureDiffTab();
+			view.syncFiles(this.pendingDiffs);
+		}
 		await this.renameMatcher?.restore();
+		if (unavailable.size) new Notice(`Drift could not read ${unavailable.size} files. Their previous checkpoints were kept; reload Drift to retry.`, 10000);
+		await this.saveState();
+	}
+
+	private saveState(): Promise<void> {
+		const data: PersistedData = {
+			settings: {...this.settings},
+			pendingDiffs: this.baselineReady ? this.serializePendingDiffs() : this.restoredDiffs,
+			baselines: this.settings.reviewWhileClosed ? this.baselineReady ? checkpoint(this.baselines, this.pendingDiffs) : this.savedBaselines : undefined,
+		};
+		// Serialize writes so an earlier, slower save cannot replace newer state.
+		this.saveQueue = this.saveQueue.then(() => this.saveData(data)).catch(error => {
+			console.error("Drift: could not save review state", error);
+			new Notice("Drift could not save reviews. Keep this session open and check storage before restarting.", 10000);
+		});
+		return this.saveQueue;
 	}
 
 	/** Mark a path as being modified by the plugin itself (suppresses detection). */
@@ -202,13 +245,10 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	/** Schedule a debounced save of state to disk. */
 	private persistState(): void {
-		if (this.saveTimer) return;
+		if (this.saveTimer || this.initializing) return;
 		this.saveTimer = activeWindow.setTimeout(() => {
 			this.saveTimer = null;
-			void this.saveData({
-				settings: this.settings,
-				pendingDiffs: this.serializePendingDiffs(),
-			});
+			void this.saveState();
 		}, 500);
 	}
 
@@ -226,7 +266,15 @@ export default class ExternalDiffPlugin extends Plugin {
 				continue;
 			}
 
-			const currentContent = await this.app.vault.read(file);
+			let currentContent: string;
+			try { currentContent = await this.app.vault.read(file); }
+			catch {
+				const diff = Object.assign(this.makeDiffCallbacks(entry.path, entry.oldContent, entry.newContent), entry);
+				diff.draftContent = entry.draftContent ?? entry.newContent;
+				diff.conflicted = true;
+				this.pendingDiffs.set(entry.path, diff);
+				continue;
+			}
 			const snapshot = restoreReview(entry, currentContent) ?? (entry.originalPath || entry.created ? {oldContent: entry.oldContent, newContent: currentContent, draftContent: currentContent, conflicted: false} : null);
 			if (!snapshot) continue;
 			const diff = Object.assign(this.makeDiffCallbacks(entry.path, snapshot.oldContent, snapshot.newContent), snapshot);
@@ -311,6 +359,7 @@ export default class ExternalDiffPlugin extends Plugin {
 						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString(), true);
 					}
 					this.baselines.set(path, update.state.doc.toString());
+					this.persistState();
 				}
 			}),
 		];
@@ -339,9 +388,11 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	/** Reconcile the returning path without associating it with another filename. */
-	private handleCreate = async (file: TAbstractFile): Promise<void> => {
+	private handleCreate = async (file: TAbstractFile, origin?: boolean): Promise<void> => {
 		const path = file.path;
-		const internal = this.internalOperations?.isInternal(path) ?? false;
+		const internal = origin ?? this.internalOperations?.isInternal(path) ?? false;
+		if (this.initializing) { this.startupEvents.push(() => { void this.handleCreate(file, internal); }); return; }
+		if (this.disposed) return;
 		const trackCreation = this.baselineReady;
 		if (this.applying.has(path)) return;
 		this.refreshMissingReviews();
@@ -379,6 +430,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			const pending = this.pendingDiffs.get(path);
 			if (pending) pending.matchContent = current;
 			this.baselines.set(path, current);
+			this.persistState();
 			if (trackCreation && (!internal || this.settings.trackApiChanges)) this.renameMatcher?.observe(path, current, true);
 		} catch (error) {
 			console.error("Drift: could not read created file", error);
@@ -386,9 +438,16 @@ export default class ExternalDiffPlugin extends Plugin {
 	};
 
 	/** Handler for vault.on('modify') — classifies Vault-API writes as internal and catches external changes to files not open in any editor. */
-	private handleModify = async (file: TAbstractFile): Promise<void> => {
+	private handleModify = async (file: TAbstractFile, origin?: boolean): Promise<void> => {
 		if (!(file instanceof TFile) || file.extension !== "md") return;
-		if (!this.settings.enabled) return;
+		const internal = origin ?? !!(file as TFile & {saving?: boolean}).saving;
+		if (this.initializing) { this.startupEvents.push(() => { void this.handleModify(file, internal); }); return; }
+		if (this.disposed) return;
+		if (!this.settings.enabled) {
+			this.baselines.set(file.path, await this.app.vault.read(file));
+			this.persistState();
+			return;
+		}
 
 		// Writes through the Vault API (plugins, Bases property edits, Obsidian
 		// Sync) run with file.saving === true, and the modify event fires
@@ -397,7 +456,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		// write completes, with saving === false. The flag is undocumented; if a
 		// future Obsidian drops it, these writes get flagged again (the old
 		// behavior) rather than external changes being missed.
-		if ((file as TFile & {saving?: boolean}).saving) {
+		if (internal) {
 			if (this.isFileOpenInEditor(file.path)) {
 				// The editor is about to sync this write in with a "set"
 				// transaction; leave a mark for the CM6 listener to consume.
@@ -415,6 +474,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				const before = this.baselines.get(file.path);
 				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
 				this.baselines.set(file.path, current);
+				this.persistState();
 				return;
 			}
 			// Ignoring an API write must not silently accept a previous external review.
@@ -427,6 +487,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.persistState();
 			}
 			this.renameMatcher?.observe(file.path, current);
+			this.persistState();
 			return;
 		}
 
@@ -692,6 +753,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	/** Handle an external file change, optionally focusing the diff tab. */
 	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false, created = false): void {
 		this.renameMatcher?.observe(path, newContent);
+		this.baselines.set(path, newContent);
 		const previous = this.pendingDiffs.get(path);
 		if (previous) previous.matchContent = newContent;
 		if (!created && !previous && this.settings.ignoreEmptyFileChanges && oldContent === "") {
@@ -713,6 +775,8 @@ export default class ExternalDiffPlugin extends Plugin {
 		diff.matchContent = newContent;
 		this.pendingDiffs.set(path, diff);
 		this.persistState();
+
+		if (this.initializing) return;
 
 		if (this.settings.focusDiffOnChange) {
 			void this.openDiffTab().then(view => view.addFile(path, diff));

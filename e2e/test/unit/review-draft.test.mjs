@@ -23,7 +23,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -32,7 +32,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -808,4 +808,74 @@ test('editor autosaves do not become plugin reviews when typing review is off', 
   await plugin.handleModify(file);
   assert.equal(plugin.pendingDiffs.size, 0);
   assert.equal(plugin.baselines.get(file.path), 'my typing');
+});
+
+test('startup reconciles offline edits, creations, deletions and rename candidates', async () => {
+  const {plugin, matcher, files, contents} = matcherSetup();
+  try {
+    plugin.settings.reviewWhileClosed = true;
+    plugin.savedBaselines = [['edited.md', 'before'], ['old.md', matchText]];
+    for (const [path, text] of [['edited.md', 'after'], ['moved.md', matchText]]) {
+      files.set(path, new TFile(path)); contents.set(path, text);
+    }
+    plugin.app.vault.getMarkdownFiles = () => [...files.values()];
+    plugin.ensureDiffTab = async () => ({syncFiles() {}});
+    let persisted;
+    plugin.saveData = async data => { persisted = data; };
+    await plugin.initializeBaselinesAndRestore();
+    await matcher.refresh();
+    assert.equal(plugin.pendingDiffs.get('edited.md').oldContent, 'before');
+    assert.equal(plugin.pendingDiffs.get('edited.md').newContent, 'after');
+    assert.equal(plugin.pendingDiffs.get('moved.md').created, true);
+    assert.equal(plugin.pendingDiffs.get('old.md').renameCandidates[0].path, 'moved.md');
+    assert.equal(new Map(persisted.baselines).get('edited.md'), 'after');
+  } finally { matcher.dispose(); }
+});
+
+test('first startup establishes checkpoints without reviewing existing notes', async () => {
+  const {plugin, matcher, files, contents} = matcherSetup();
+  try {
+    plugin.settings.reviewWhileClosed = true;
+    files.set('existing.md', new TFile('existing.md')); contents.set('existing.md', 'existing');
+    plugin.app.vault.getMarkdownFiles = () => [...files.values()];
+    plugin.saveData = async () => {};
+    await plugin.initializeBaselinesAndRestore();
+    assert.equal(plugin.pendingDiffs.size, 0);
+    assert.equal(plugin.baselines.get('existing.md'), 'existing');
+  } finally { matcher.dispose(); }
+});
+
+test('startup read failures keep checkpoint text and edited review drafts', async () => {
+  const {plugin, matcher, files, deleted} = matcherSetup();
+  try {
+    plugin.settings.reviewWhileClosed = true;
+    const diff = deleted('unreadable.md'); diff.draftContent = 'saved draft';
+    plugin.restoredDiffs = plugin.serializePendingDiffs(); plugin.pendingDiffs.clear();
+    plugin.savedBaselines = [['unreadable.md', 'previous checkpoint']];
+    files.set('unreadable.md', new TFile('unreadable.md'));
+    plugin.app.vault.getMarkdownFiles = () => [...files.values()];
+    plugin.app.vault.read = async () => { throw new Error('sync lock'); };
+    plugin.ensureDiffTab = async () => ({syncFiles() {}});
+    plugin.saveData = async () => {};
+    await plugin.initializeBaselinesAndRestore();
+    assert.equal(plugin.baselines.get('unreadable.md'), 'previous checkpoint');
+    assert.equal(plugin.pendingDiffs.get('unreadable.md').draftContent, 'saved draft');
+  } finally { matcher.dispose(); }
+});
+
+test('startup scan bounds concurrent reads and preserves per-file failures', async () => {
+  const files = Array.from({length: 15}, (_, i) => new TFile(`${i}.md`));
+  let active = 0, peak = 0;
+  const {contents, unavailable} = await readCheckpoint({
+    getMarkdownFiles: () => files,
+    getAbstractFileByPath: path => files.find(f => f.path === path),
+    read: async file => {
+      active++; peak = Math.max(active, peak);
+      await new Promise(resolve => setTimeout(resolve, 1)); active--;
+      if (file.path === '3.md') throw new Error('locked');
+      return file.path;
+    },
+  });
+  assert.equal(contents.size, 14); assert.deepEqual([...unavailable], ['3.md']);
+  assert.ok(peak <= 4);
 });

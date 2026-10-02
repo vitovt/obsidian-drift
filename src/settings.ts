@@ -7,6 +7,7 @@ export interface ExternalDiffSettings {
 	enabled: boolean;
 	trackInAppChanges: boolean;
 	trackApiChanges: boolean;
+	reviewWhileClosed: boolean;
 	trackFileRenames: boolean;
 	trackFileDeletions: boolean;
 	ignoreEmptyFileChanges: boolean;
@@ -23,6 +24,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	trackInAppChanges: false,
 	trackApiChanges: true,
+	reviewWhileClosed: true,
 	trackFileRenames: false,
 	trackFileDeletions: false,
 	ignoreEmptyFileChanges: false,
@@ -58,6 +60,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				}));
 
 		for (const [key, name, description] of [
+			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Disable to remove checkpoints on the next save."],
 			["trackInAppChanges", "Review my typing", "Include edits made in the Obsidian editor. Your typing is ignored by default."],
 			["trackApiChanges", "Review plugin and file operations", "Include writes through Obsidian APIs, including connected AI tools, plugins, and in-app file operations. Their individual origins cannot always be distinguished."],
 		] as const) {
