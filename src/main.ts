@@ -3,7 +3,7 @@ import {EditorView, ViewUpdate} from "@codemirror/view";
 import {EditorState, Transaction, Extension} from "@codemirror/state";
 import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab} from "./settings";
 import {DiffView, DIFF_VIEW_TYPE, PendingDiff} from "./DiffView";
-import {PersistedDiffEntry, restoreReview, ReviewConflictError, writeReviewedContent, unresolvedRename} from "./reviewDraft";
+import {PersistedDiffEntry, restoreReview} from "./reviewDraft";
 import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
 import {formatExportFilename} from "./export/filename";
 import {validContextLines} from "./export/unifiedDiff";
@@ -12,6 +12,7 @@ import {RenameReviewModal} from "./renameReviewModal";
 import {InternalOperations} from "./internalOperations";
 import {checkpoint, readCheckpoint} from "./checkpoint";
 import {markDeleted, markPresent} from "./reviewTransitions";
+import {ReviewOperations} from "./reviewOperations";
 import {FileLifecycle} from "./fileLifecycle";
 
 interface PersistedData {
@@ -54,6 +55,18 @@ export default class ExternalDiffPlugin extends Plugin {
 	private baselineReady = false;
 	private internalOperations: InternalOperations;
 	private restoringPath: string | null = null;
+	private reviewOperations?: ReviewOperations;
+
+	private get operations(): ReviewOperations {
+		return this.reviewOperations ??= new ReviewOperations({
+			app: this.app, reviews: this.pendingDiffs, baselines: this.baselines,
+			applying: this.applying, selfModifyPaths: this.selfModifyPaths,
+			refreshMissing: () => this.refreshMissingReviews(), view: () => this.getExistingDiffView(),
+			changed: () => { this.persistState(); this.renameMatcher?.schedule(); },
+			make: (path, original, result) => this.makeDiffCallbacks(path, original, result),
+			setRestoringPath: path => { this.restoringPath = path; },
+		});
+	}
 
 	async onload() {
 		await this.loadSettings();
@@ -580,9 +593,9 @@ export default class ExternalDiffPlugin extends Plugin {
 			newContent,
 			draftContent: newContent,
 			conflicted: false,
-			onAccept: content => this.completeReview(diff.path!, diff, content, true),
-			onReject: () => this.completeReview(diff.path!, diff, diff.oldContent),
-			onKeepDeletion: () => this.keepDeletion(diff.path!, diff),
+			onAccept: content => this.operations.completeReview(diff.path!, diff, content, true),
+			onReject: () => this.operations.completeReview(diff.path!, diff, diff.oldContent),
+			onKeepDeletion: () => this.operations.keepDeletion(diff.path!, diff),
 			onFindRename: () => new RenameReviewModal(this.app, diff.path!, diff, this.renameMatcher).open(),
 			onKeepSeparate: () => this.renameMatcher.keepSeparate(diff),
 			onResumeMatching: () => this.renameMatcher.resume(diff),
@@ -590,7 +603,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				diff.draftContent = content;
 				this.persistState();
 			},
-			onReviewLatest: () => this.reviewLatest(diff.path!, diff),
+			onReviewLatest: () => this.operations.reviewLatest(diff.path!, diff),
 		};
 		return diff;
 	}
@@ -606,144 +619,6 @@ export default class ExternalDiffPlugin extends Plugin {
 			}
 			diff.missing = missing;
 			this.getExistingDiffView()?.updateReviewStatus(path);
-		}
-	}
-
-	/** Apply only to the version reviewed, leaving failed/conflicting drafts open. */
-	private async completeReview(path: string, diff: PendingDiff, content: string, accept = false): Promise<boolean> {
-		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return false;
-		this.refreshMissingReviews();
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (unresolvedRename(diff)) { new Notice("Resolve the possible rename before applying this review."); return false; }
-
-		if (diff.conflicted && !diff.missing) {
-			new Notice("Review the latest file changes before applying this draft.");
-			return false;
-		}
-		this.applying.add(path);
-		try {
-			if (diff.created && !accept) {
-				if (file instanceof TFile) {
-					const current = await this.app.vault.read(file);
-					if (current !== diff.newContent || file.path !== path || this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
-					await this.app.fileManager.trashFile(file);
-				}
-				this.pendingDiffs.delete(path);
-				this.baselines.delete(path);
-				this.persistState();
-				return true;
-			}
-			const restorePath = diff.originalPath && !accept;
-			if (restorePath) {
-				const target = diff.originalPath!;
-				if (this.app.vault.getAbstractFileByPath(target)) throw new Error("The original path is occupied. Nothing was changed.");
-				const parent = target.slice(0, target.lastIndexOf("/"));
-				if (target.includes("/") && !this.app.vault.getAbstractFileByPath(parent)) throw new Error("The original folder is missing. Restore it before restoring the path.");
-			}
-			if (!(file instanceof TFile)) {
-				await this.ensureParentFolders(path);
-				// create refuses an occupied path, including files arriving during sync.
-				if (this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
-				await this.app.vault.create(path, content);
-				if (restorePath) {
-					const recreated = this.app.vault.getAbstractFileByPath(path);
-					if (!(recreated instanceof TFile)) throw new ReviewConflictError();
-					this.restoringPath = path;
-					try { await this.app.vault.rename(recreated, diff.originalPath!); }
-					finally { this.restoringPath = null; }
-				}
-			} else if (content === diff.newContent) {
-				// Acknowledgement must not emit a write, even when disk changed again.
-				const current = await this.app.vault.read(file);
-				if (!accept && current !== diff.newContent) throw new ReviewConflictError();
-				content = current;
-				if (this.pendingDiffs.get(path) !== diff || file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file) return false;
-			} else {
-				await writeReviewedContent(this.app.vault, file, diff.newContent, content, () => {
-					if (this.pendingDiffs.get(path) !== diff || file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file) throw new ReviewConflictError();
-					this.selfModifyPaths.add(path);
-				});
-			}
-			if (file instanceof TFile && (file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file)) throw new ReviewConflictError();
-			if (file instanceof TFile && !(accept && content === diff.newContent)) {
-				// A later rename failure must not make the successful content write look stale.
-				diff.newContent = content;
-			}
-			if (restorePath && file instanceof TFile) {
-				if (file.path !== path || this.pendingDiffs.get(path) !== diff) throw new ReviewConflictError();
-				this.restoringPath = path;
-				try { await this.app.vault.rename(file, diff.originalPath!); }
-				finally { this.restoringPath = null; }
-				this.baselines.delete(path);
-			}
-			if (this.pendingDiffs.get(path) === diff) this.pendingDiffs.delete(path);
-			if (!(file instanceof TFile)) {
-				diff.deleted = false;
-				diff.missing = false;
-			}
-			this.baselines.set(restorePath ? diff.originalPath! : path, content);
-			this.persistState();
-			return true;
-		} catch (error) {
-			this.selfModifyPaths.delete(path);
-			if (error instanceof ReviewConflictError) {
-				diff.conflicted = true;
-				this.getExistingDiffView()?.updateReviewStatus(path);
-				new Notice("The file changed again. Review the latest changes before applying your draft.");
-			} else {
-				console.error("Drift: could not apply review", error);
-				new Notice(`Could not finish applying the review. ${error instanceof Error ? error.message : ""} Your draft is still available; check the file before retrying.`, 12000);
-			}
-			this.persistState();
-			return false;
-		} finally {
-			this.applying.delete(path);
-		}
-	}
-
-	private async ensureParentFolders(path: string): Promise<void> {
-		const parts = path.split("/");
-		parts.pop();
-		let parent = "";
-		for (const part of parts) {
-			parent = parent ? `${parent}/${part}` : part;
-			if (!this.app.vault.getAbstractFileByPath(parent)) await this.app.vault.createFolder(parent);
-		}
-	}
-
-	private keepDeletion(path: string, diff: PendingDiff): Promise<boolean> {
-		if (unresolvedRename(diff)) { new Notice("Resolve the possible rename first."); return Promise.resolve(false); }
-		if (this.pendingDiffs.get(path) !== diff || this.applying.has(path)) return Promise.resolve(false);
-		if (this.app.vault.getAbstractFileByPath(path)) {
-			this.refreshMissingReviews();
-			new Notice("The file has reappeared. Review its current contents before continuing.");
-			return Promise.resolve(false);
-		}
-		this.pendingDiffs.delete(path);
-		this.baselines.delete(path);
-		this.persistState();
-		return Promise.resolve(true);
-	}
-
-	/** Compare the preserved draft against the latest disk version, without writing. */
-	private async reviewLatest(path: string, previous: PendingDiff): Promise<void> {
-		if (this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
-		const file = this.app.vault.getAbstractFileByPath(path);
-		if (!(file instanceof TFile)) return;
-		try {
-			const current = await this.app.vault.read(file);
-			if (this.pendingDiffs.get(path) !== previous) return;
-			const diff = this.makeDiffCallbacks(path, current, current);
-			diff.draftContent = previous.draftContent;
-			diff.renameSources = previous.renameSources;
-			diff.originalPath = previous.originalPath;
-			diff.created = previous.created;
-			this.pendingDiffs.set(path, diff);
-			this.getExistingDiffView()?.addFile(path, diff);
-			this.persistState();
-		} catch (error) {
-			console.error("Drift: could not read latest version", error);
-			new Notice("Could not read the latest version. Your draft is still available.");
 		}
 	}
 
