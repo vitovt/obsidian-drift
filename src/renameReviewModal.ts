@@ -4,6 +4,7 @@ import {EditorView, lineNumbers} from "@codemirror/view";
 import {EditorState} from "@codemirror/state";
 import type {PendingDiff} from "./DiffView";
 import type {RenameMatcher} from "./renameMatcher";
+import {renamePath, renamePaths} from "./renamePaths";
 
 class RenameFilePicker extends FuzzySuggestModal<TFile> {
 	constructor(app: App, private source: string, private select: (file: TFile) => void) {
@@ -30,12 +31,14 @@ export class RenameReviewModal extends Modal {
 	onOpen(): void {
 		this.modalEl.addClass("diff-rename-modal");
 		this.titleEl.setText("Possible rename");
-		this.contentEl.createEl("p", {text: `Missing file: ${this.path}`});
+		renamePath(this.contentEl.createDiv({cls: "diff-rename-paths"}), "From", this.path, true);
 		this.contentEl.createEl("p", {text: "Candidates are ordered by content similarity, not certainty. Preview a file before confirming."});
 		const candidates = this.diff.renameCandidates ?? [];
 		if (!candidates.length) this.contentEl.createEl("p", {text: "No automatic match found. You can select a file manually."});
 		for (const candidate of candidates) {
-			new Setting(this.contentEl).setName(candidate.path)
+			const setting = new Setting(this.contentEl);
+			renamePath(setting.nameEl, "To", candidate.path, true);
+			setting
 				.setDesc(candidate.score === 1 ? "Identical contents" : `${Math.floor(candidate.score * 100)}% content similarity`)
 				.addButton(button => button.setButtonText("Preview").onClick(() => { void this.select(candidate.path); }));
 		}
@@ -78,7 +81,9 @@ export class RenameReviewModal extends Modal {
 			this.preview = new MergeView({parent: this.previewEl,
 				a: {doc: this.diff.matchContent ?? this.diff.newContent, extensions}, b: {doc: content, extensions},
 				highlightChanges: true, diffConfig: {scanLimit: 500, timeout: 50}});
-			this.status.setText(`Last known contents → ${path}. Confirm rename links this review to the selected file; it does not move or modify files.`);
+			this.status.empty();
+			renamePaths(this.status, this.path, path, true);
+			this.status.createSpan({text: "Confirm rename links this review to the selected file; it does not move or modify files."});
 			this.selected = {path, content};
 			this.confirmButton.disabled = false;
 		} catch (error) {

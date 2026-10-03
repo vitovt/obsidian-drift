@@ -1,5 +1,6 @@
 import {Notice} from "obsidian";
 import type {PendingDiff} from "./DiffView";
+import {renamePaths} from "./renamePaths";
 
 /** Update association controls independently of the editable comparison. */
 export function renderRenameSuggestions(container: HTMLElement, diff: PendingDiff, tracking: boolean): void {
@@ -15,8 +16,8 @@ export function renderRenameSuggestions(container: HTMLElement, diff: PendingDif
 		const candidates = diff.renameCandidates ?? [];
 		const best = candidates[0];
 		if (best) {
-			container.createDiv({text: `Possible rename: ${best.path}`});
-			container.createDiv({text: best.score === 1 ? "Identical contents; confirmation required." : `${Math.floor(best.score * 100)}% content similarity; confirmation required.`});
+			renamePaths(container, diff.path ?? "Missing file", best.path);
+			container.createDiv({text: best.score === 1 ? "Possible rename · identical contents; confirmation required." : `Possible rename · ${Math.floor(best.score * 100)}% content similarity; confirmation required.`});
 			if (candidates.length > 1) container.createDiv({text: `${candidates.length - 1} other possible matches available.`});
 		} else if (tracking && !diff.renameDismissed) {
 			container.createDiv({text: "No automatic match yet. Large, empty, short, or older files may need manual selection."});
@@ -24,6 +25,15 @@ export function renderRenameSuggestions(container: HTMLElement, diff: PendingDif
 		const choose = container.createEl("button", {text: best ? "Review match…" : "Select renamed file…"});
 		choose.addEventListener("click", () => diff.onFindRename?.());
 		if (best) {
+			const confirm = container.createEl("button", {text: "Confirm rename"});
+			confirm.disabled = !diff.onConfirmRename;
+			confirm.title = `Associate with ${best.path} without opening a preview. No files are moved or changed.`;
+			confirm.addEventListener("click", () => {
+				confirm.disabled = true;
+				void diff.onConfirmRename?.(best.path).catch(error => {
+					new Notice(error instanceof Error ? error.message : "Could not confirm rename.");
+				}).finally(() => { confirm.disabled = false; });
+			});
 			const separate = container.createEl("button", {text: "Treat as separate files"});
 			separate.addEventListener("click", () => diff.onKeepSeparate?.());
 		} else if (diff.renameDismissed) {

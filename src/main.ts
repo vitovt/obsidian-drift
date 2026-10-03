@@ -679,6 +679,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			onReject: () => this.operations.completeReview(diff.path!, diff, diff.oldContent),
 			onKeepDeletion: () => this.operations.keepDeletion(diff.path!, diff),
 			onFindRename: () => new RenameReviewModal(this.app, diff.path!, diff, this.renameMatcher).open(),
+			onConfirmRename: target => this.renameMatcher.confirmCandidate(diff.path!, diff, target),
 			onKeepSeparate: () => this.renameMatcher.keepSeparate(diff),
 			onResumeMatching: () => this.renameMatcher.resume(diff),
 			onDraftChange: content => {

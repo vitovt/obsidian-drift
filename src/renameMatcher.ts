@@ -147,6 +147,14 @@ export class RenameMatcher {
 		this.host.changed();
 	}
 
+	async confirmCandidate(sourcePath: string, diff: PendingDiff, targetPath: string): Promise<void> {
+		const candidate = this.created.get(targetPath);
+		if (!candidate || !diff.renameCandidates?.some(item => item.path === targetPath)) {
+			throw new Error("This match is no longer available. Review the match again.");
+		}
+		await this.confirm(sourcePath, diff, targetPath, candidate.text);
+	}
+
 	async confirm(sourcePath: string, diff: PendingDiff, targetPath: string, expected: string): Promise<void> {
 		const {vault, reviews} = this.host;
 		const target = vault.getAbstractFileByPath(targetPath);
