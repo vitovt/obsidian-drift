@@ -7,6 +7,7 @@ export interface ExternalDiffSettings {
 	enabled: boolean;
 	trackInAppChanges: boolean;
 	trackApiChanges: boolean;
+	trackProgrammaticChanges: boolean;
 	reviewWhileClosed: boolean;
 	reviewNewFiles: boolean;
 	trackFileRenames: boolean;
@@ -25,6 +26,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	trackInAppChanges: false,
 	trackApiChanges: true,
+	trackProgrammaticChanges: true,
 	reviewWhileClosed: true,
 	reviewNewFiles: false,
 	trackFileRenames: false,
@@ -74,8 +76,9 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 			.setDesc("Drift's main purpose: review Markdown file changes made by external editors, AI agents, scripts, and sync tools such as Dropbox. Always monitored while change detection is enabled; no separate switch is needed. New files, renames, and deletions follow the file options below.");
 
 		for (const [key, name, description] of [
-			["trackInAppChanges", "Review editor changes", "Include typing, pasting, and changes made by plugins through the editor, such as automatic link-title formatting. Drift cannot reliably separate your edits from plugin edits in the editor. Off by default."],
-			["trackApiChanges", "Review file API operations", "Include content changes and file operations made through Obsidian's file APIs by plugins, integrations, or Obsidian itself. Plugins that edit through the editor follow Review editor changes instead. New files, renames, and deletions also follow the options below. The source cannot always be identified."],
+			["trackInAppChanges", "Review other editor changes", "Include typing, pasting, and editor changes not recognized as Editor API calls. Plugins that modify CodeMirror directly also fall into this group. Off by default."],
+			["trackProgrammaticChanges", "Review Editor API changes (experimental)", "Include programmatic edits through Editor API methods, such as automatic link-title formatting. Plugins and Obsidian itself can use these methods; this does not identify the author. Direct CodeMirror changes and calls before an editor is attached may not be recognized. Enabled by default on this experimental branch."],
+			["trackApiChanges", "Review file API operations", "Include content changes and file operations made through Obsidian's file APIs by plugins, integrations, or Obsidian itself. Editor API calls follow Review Editor API changes instead; other editor edits follow Review other editor changes. New files, renames, and deletions also follow the options below. The source cannot always be identified."],
 			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Changes found at startup cannot be attributed to an editor or plugin. Disable to remove checkpoints on the next save."],
 		] as const) {
 			new Setting(sources).setName(name).setDesc(description)

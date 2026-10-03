@@ -15,6 +15,7 @@ import {markDeleted, markPresent} from "./reviewTransitions";
 import {CreationQueue} from "./creationQueue";
 import {ReviewOperations} from "./reviewOperations";
 import {FileLifecycle} from "./fileLifecycle";
+import {ProgrammaticEdits} from "./programmaticEdits";
 import {EditorSaves} from "./editorSaves";
 
 interface PersistedData {
@@ -42,6 +43,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private baselines = new Map<string, string>();
 	private selfModifyPaths = new Set<string>();
 	private typingContents = new EditorSaves();
+	private programmaticEdits = new ProgrammaticEdits();
 	private internalWritePaths = new Map<string, number>();
 	private pendingEditWarning = new Set<string>();
 	private savedBaselines: [string, string][] | undefined;
@@ -76,6 +78,17 @@ export default class ExternalDiffPlugin extends Plugin {
 
 		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings, () => this.renameMatcher?.status ?? ""));
 		this.registerView(EXPORT_TEXT_VIEW, leaf => new ExportTextView(leaf));
+
+		const syncEditors = () => this.programmaticEdits.sync(
+			this.app.workspace.getLeavesOfType("markdown").flatMap(leaf => {
+				const view = leaf.view as MarkdownView;
+				return view.editor ? [{editor: view.editor, path: () => view.file?.path}] : [];
+			}));
+		this.register(() => this.programmaticEdits.dispose());
+		this.registerEvent(this.app.workspace.on("layout-change", syncEditors));
+		this.registerEvent(this.app.workspace.on("file-open", syncEditors));
+		this.app.workspace.onLayoutReady(syncEditors);
+		syncEditors();
 
 		// CM6 detection: register updateListener on all editors
 		this.registerEditorExtension(this.createDetectionExtension());
@@ -322,6 +335,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 				const path = this.getPathForEditorState(tr.startState);
 				if (!path || !this.pendingDiffs.has(path)) return tr;
+				if (this.programmaticEdits.isActive(path)) return tr;
 				const pending = this.pendingDiffs.get(path)!;
 				if (pending.internalReview && pending.draftContent === pending.newContent && !pending.conflicted) return tr;
 				if (this.pendingEditWarning.has(path)) return [];
@@ -360,7 +374,7 @@ export default class ExternalDiffPlugin extends Plugin {
 					tr.annotation(Transaction.userEvent) === "set"
 				);
 
-				if (isExternalSync) {
+				if (isExternalSync && !this.programmaticEdits.isActive(path)) {
 					// A fresh mark means this "set" is Obsidian syncing an in-app
 					// API write into the editor, not an external change.
 					if (this.consumeInternalWriteMark(path)) {
@@ -373,12 +387,13 @@ export default class ExternalDiffPlugin extends Plugin {
 						this.handleExternalChange(path, oldContent, newContent);
 					}
 				} else {
-					this.typingContents.set(path, update.state.doc.toString());
 					this.renameMatcher?.observe(path, update.state.doc.toString());
-					if (this.settings.trackInAppChanges) {
+					const programmatic = this.programmaticEdits.isActive(path);
+					if (programmatic ? this.settings.trackProgrammaticChanges : this.settings.trackInAppChanges) {
 						const previous = this.baselines.get(path);
-						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString(), true);
+						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString(), !programmatic);
 					}
+					this.typingContents.set(path, update.state.doc.toString());
 					this.baselines.set(path, update.state.doc.toString());
 					this.persistState();
 				}
@@ -640,7 +655,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	/** Handle an external file change, optionally focusing the diff tab. */
 	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false, created = false): void {
-		if (!internal) this.typingContents.delete(path);
+		if (!internal && !this.programmaticEdits.isActive(path)) this.typingContents.delete(path);
 		this.renameMatcher?.observe(path, newContent);
 		this.baselines.set(path, newContent);
 		const previous = this.pendingDiffs.get(path);

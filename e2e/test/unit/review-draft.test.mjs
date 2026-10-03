@@ -25,7 +25,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export {EditorSaves} from './src/editorSaves'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export {EditorSaves} from './src/editorSaves'; export {ProgrammaticEdits} from './src/programmaticEdits'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -34,7 +34,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {EditorSaves, reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {ProgrammaticEdits, EditorSaves, reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -1035,4 +1035,69 @@ test('editor autosave history expires and stays bounded', () => {
     saves.set('large.md', 'x'.repeat(9 * 1024 * 1024));
     assert.equal(saves.entries.length, 0);
   } finally { Date.now = originalNow; }
+});
+
+
+test('Editor API tracking preserves nested calls, receivers, exceptions and cleanup', () => {
+  const tracker = new ProgrammaticEdits();
+  let path = 'note.md';
+  const prototype = {
+    replaceRange(text) {
+      assert.equal(this, editor);
+      assert.equal(tracker.isActive(path), true);
+      if (text === 'fail') throw new Error('edit failed');
+      return text;
+    },
+    replaceSelection(text) { return this.replaceRange(text); },
+  };
+  const editor = Object.create(prototype);
+  tracker.sync([{editor, path: () => path}]);
+  const wrapped = editor.replaceRange;
+  tracker.sync([{editor, path: () => path}]);
+  assert.equal(editor.replaceRange, wrapped);
+  assert.equal(editor.replaceSelection('link'), 'link');
+  assert.equal(tracker.isActive(path), false);
+  assert.throws(() => editor.replaceSelection('fail'), /edit failed/);
+  assert.equal(tracker.isActive(path), false);
+  path = 'renamed.md';
+  assert.equal(editor.replaceRange('new text'), 'new text');
+  tracker.sync([]);
+  assert.equal(Object.hasOwn(editor, 'replaceRange'), false);
+  tracker.sync([{editor, path: () => path}]);
+  const originalWrapper = editor.replaceRange;
+  editor.replaceRange = function(text) { return text; };
+  tracker.dispose();
+  assert.notEqual(editor.replaceRange, originalWrapper);
+  const detached = new ProgrammaticEdits();
+  const receiver = {replaceRange() { return detached.isActive('other.md'); }};
+  detached.sync([{editor: receiver, path: () => 'other.md'}]);
+  const retainedWrapper = receiver.replaceRange;
+  detached.dispose();
+  assert.equal(retainedWrapper.call(receiver), false);
+});
+
+
+test('programmatic conversion retains older autosave versions and its forward review', async () => {
+  const {plugin, file} = setup();
+  plugin.pendingDiffs.clear(); plugin.settings.trackApiChanges = true;
+  plugin.ensureDiffTab = async () => ({addFile() {}});
+  const raw = 'https://example.com/';
+  const linked = '[Example](https://example.com/)';
+  plugin.typingContents.set(file.path, raw);
+  plugin.baselines.set(file.path, raw);
+  const editor = {replaceRange() {
+    plugin.handleExternalChange(file.path, raw, linked);
+    plugin.typingContents.set(file.path, linked);
+  }};
+  plugin.programmaticEdits.sync([{editor, path: () => file.path}]);
+  editor.replaceRange();
+  file.saving = true;
+  for (const text of [raw, linked]) {
+    plugin.app.vault.cachedRead = async () => text;
+    await plugin.handleModify(file);
+    assert.equal(plugin.pendingDiffs.get(file.path).oldContent, raw);
+    assert.equal(plugin.pendingDiffs.get(file.path).newContent, linked);
+    assert.equal(plugin.baselines.get(file.path), linked);
+  }
+  plugin.programmaticEdits.dispose();
 });
