@@ -2,6 +2,7 @@ import {TFile, type Vault} from "obsidian";
 import type {PendingDiff} from "./DiffView";
 import type {ExternalDiffSettings} from "./settings";
 import {markPresent} from "./reviewTransitions";
+import {snapshotReview, type RenameUndo} from "./reviewDraft";
 import {fingerprint, similarity, MAX_MATCH_TEXT, type Fingerprint} from "./renameSimilarity";
 
 const MAX_CANDIDATES = 128;
@@ -15,6 +16,7 @@ interface Host {
 	baselines: Map<string, string>;
 	changed(): void;
 	busy(path: string): boolean;
+	createReview(path: string, oldContent: string, newContent: string): PendingDiff;
 }
 
 /** Event-only candidate collection; no vault scan and no automatic associations. */
@@ -27,6 +29,7 @@ export class RenameMatcher {
 	private nextSource = 0;
 	status = "";
 	private limited = false;
+	private undoEditors = new WeakMap<RenameUndo, {source: PendingDiff["editorState"]; target: PendingDiff["editorState"]}>();
 	constructor(private host: Host) {}
 
 	observe(path: string, text: string, created = false): void {
@@ -135,6 +138,7 @@ export class RenameMatcher {
 	}
 
 	keepSeparate(diff: PendingDiff): void {
+		diff.renameDecisionPending = false;
 		diff.renameDismissed = true;
 		diff.renameCandidates = [];
 		this.schedule();
@@ -167,7 +171,8 @@ export class RenameMatcher {
 		if (other && (other.draftContent !== other.newContent || other.conflicted || other.originalPath)) {
 			throw new Error("The selected file has its own unfinished review. Resolve it before associating these files.");
 		}
-		const before = {...diff};
+		const before = snapshotReview(diff);
+		const beforeEditor = diff.editorState;
 		const edited = diff.draftContent !== diff.newContent;
 		if (!edited) {
 			if (diff.draftContent !== current) diff.editorState = undefined;
@@ -194,29 +199,49 @@ export class RenameMatcher {
 		this.created.delete(targetPath);
 		this.host.baselines.set(targetPath, current);
 		for (const entry of reviews.values()) entry.renameCandidates = entry.renameCandidates?.filter(candidate => candidate.path !== targetPath);
-		const associatedDraft = diff.draftContent;
-		diff.onUndoRename = async () => {
-			const targetNow = vault.getAbstractFileByPath(targetPath);
-			const latest = targetNow instanceof TFile ? await vault.read(targetNow) : null;
-			if (reviews.get(targetPath) !== diff || vault.getAbstractFileByPath(sourcePath) ||
-				this.host.busy(sourcePath) || this.host.busy(targetPath)) throw new Error("The paths changed. Resolve the current review before undoing this association.");
-			const currentDraft = diff.draftContent;
-			const editorState = diff.editorState;
-			Object.assign(diff, before);
-			diff.originalPath = before.originalPath;
-			diff.created = before.created;
-			if (currentDraft !== associatedDraft) { diff.draftContent = currentDraft; diff.editorState = editorState; }
-			diff.onUndoRename = undefined;
-			diff.renameDismissed = true;
-			diff.renameCandidates = [];
-			reviews.delete(targetPath);
-			reviews.set(sourcePath, diff);
-			if (other) { other.conflicted = latest !== null && latest !== other.newContent; reviews.set(targetPath, other); }
-			if (latest !== null) this.observe(targetPath, latest, true);
-			this.host.changed();
-			this.schedule();
-			await Promise.resolve();
-		};
+		diff.renameUndo = {sourcePath, targetPath, source: before,
+			target: other ? snapshotReview(other) : undefined};
+		this.undoEditors.set(diff.renameUndo, {source: beforeEditor, target: other?.editorState});
+		this.host.changed();
+		this.schedule();
+	}
+
+	async undo(diff: PendingDiff): Promise<void> {
+		const saved = diff.renameUndo;
+		if (!saved) throw new Error("Undo data is not available for this older association.");
+		const {sourcePath, targetPath} = saved;
+		const {vault, reviews} = this.host;
+		const target = vault.getAbstractFileByPath(targetPath);
+		if (!(target instanceof TFile)) throw new Error("The associated file is missing. Restore it before undoing the association.");
+		const latest = await vault.read(target);
+		if (this.disposed || reviews.get(targetPath) !== diff || diff.path !== targetPath || diff.renameUndo !== saved ||
+			vault.getAbstractFileByPath(sourcePath) || reviews.has(sourcePath) ||
+			vault.getAbstractFileByPath(targetPath) !== target || target.path !== targetPath ||
+			this.host.busy(sourcePath) || this.host.busy(targetPath)) {
+			throw new Error("The paths or reviews changed. Resolve them before undoing this association.");
+		}
+		const draft = diff.draftContent;
+		const editor = diff.editorState;
+		const edited = draft !== diff.newContent;
+		Object.assign(diff, snapshotReview(saved.source));
+		diff.path = sourcePath;
+		diff.missing = true;
+		diff.renameUndo = undefined;
+		diff.editorState = this.undoEditors.get(saved)?.source;
+		if (edited) { diff.draftContent = draft; diff.editorState = editor; }
+		diff.renameDismissed = false;
+		diff.renameDecisionPending = true;
+		diff.renameCandidates = saved.source.renameCandidates?.filter(candidate => vault.getAbstractFileByPath(candidate.path) instanceof TFile) ?? [];
+		reviews.delete(targetPath);
+		reviews.set(sourcePath, diff);
+		if (saved.target) {
+			const other = Object.assign(this.host.createReview(targetPath, saved.target.oldContent, saved.target.newContent), saved.target);
+			other.path = targetPath;
+			other.editorState = this.undoEditors.get(saved)?.target;
+			other.conflicted = latest !== other.newContent;
+			reviews.set(targetPath, other);
+		}
+		this.observe(targetPath, latest, true);
 		this.host.changed();
 		this.schedule();
 	}

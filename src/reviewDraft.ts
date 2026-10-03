@@ -12,10 +12,34 @@ export interface LifecycleState {
 	renameCandidates?: {path: string; score: number}[];
 	renameSources?: string[];
 	renameDismissed?: boolean;
+	/** Undoing an association requires an explicit new rename/separate decision. */
+	renameDecisionPending?: boolean;
+	renameUndo?: RenameUndo;
+}
+
+export interface RenameUndo {
+	sourcePath: string;
+	targetPath: string;
+	source: ReviewSnapshot;
+	target?: ReviewSnapshot;
+}
+
+/** Only review data: no callbacks or CodeMirror state enter persisted snapshots. */
+export function snapshotReview(review: ReviewSnapshot): ReviewSnapshot {
+	return {
+		oldContent: review.oldContent, newContent: review.newContent,
+		draftContent: review.draftContent, conflicted: review.conflicted,
+		path: review.path, originalPath: review.originalPath, created: review.created,
+		deleted: review.deleted, deletionOnly: review.deletionOnly,
+		internalReview: review.internalReview, matchContent: review.matchContent,
+		renameCandidates: review.renameCandidates?.map(candidate => ({...candidate})),
+		renameSources: review.renameSources?.slice(), renameDismissed: review.renameDismissed,
+		renameDecisionPending: review.renameDecisionPending,
+	};
 }
 
 export function unresolvedRename(diff: LifecycleState): boolean {
-	return !!(diff.renameCandidates?.length || diff.renameSources?.length);
+	return !!(diff.renameDecisionPending || diff.renameCandidates?.length || diff.renameSources?.length);
 }
 
 export function renameOnly(diff: ReviewSnapshot): boolean {

@@ -13,4 +13,5 @@ export function markPresent<T extends ReviewSnapshot & {missing?: boolean}>(revi
 	review.deletionOnly = false;
 	review.missing = false;
 	review.renameCandidates = [];
+	review.renameDecisionPending = false;
 }

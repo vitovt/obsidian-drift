@@ -120,6 +120,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 		this.renameMatcher = new RenameMatcher({vault: this.app.vault, settings: this.settings,
 			reviews: this.pendingDiffs, baselines: this.baselines, busy: path => this.applying.has(path),
+			createReview: (path, original, result) => this.makeDiffCallbacks(path, original, result),
 			changed: () => { this.persistState(); this.getExistingDiffView()?.syncFiles(this.pendingDiffs); },
 		});
 		this.register(() => this.renameMatcher.dispose());
@@ -298,6 +299,8 @@ export default class ExternalDiffPlugin extends Plugin {
 			renameCandidates: diff.renameCandidates,
 			renameSources: diff.renameSources,
 			renameDismissed: diff.renameDismissed,
+			renameDecisionPending: diff.renameDecisionPending,
+			renameUndo: diff.renameUndo,
 			internalReview: diff.internalReview,
 		}));
 	}
@@ -338,6 +341,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			if (!snapshot) continue;
 			const diff = Object.assign(this.makeDiffCallbacks(entry.path, snapshot.oldContent, snapshot.newContent), snapshot);
 			diff.originalPath = entry.originalPath;
+			diff.renameUndo = entry.renameUndo;
 			diff.created = entry.created;
 			diff.renameSources = entry.renameSources;
 			diff.internalReview = entry.internalReview;
@@ -679,6 +683,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			onReject: () => this.operations.completeReview(diff.path!, diff, diff.oldContent),
 			onKeepDeletion: () => this.operations.keepDeletion(diff.path!, diff),
 			onFindRename: () => new RenameReviewModal(this.app, diff.path!, diff, this.renameMatcher).open(),
+			onUndoRename: () => this.renameMatcher.undo(diff),
 			onConfirmRename: target => this.renameMatcher.confirmCandidate(diff.path!, diff, target),
 			onKeepSeparate: () => this.renameMatcher.keepSeparate(diff),
 			onResumeMatching: () => this.renameMatcher.resume(diff),
@@ -731,6 +736,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		}
 		const diff = this.makeDiffCallbacks(path, previous?.oldContent ?? oldContent, newContent);
 		diff.originalPath = previous?.originalPath;
+		diff.renameUndo = previous?.renameUndo;
 		diff.created = previous?.created ?? created;
 		diff.internalReview = internal;
 		diff.renameSources = previous?.renameSources ?? [...this.pendingDiffs].filter(([, review]) => review.renameCandidates?.some(candidate => candidate.path === path)).map(([source]) => source);
