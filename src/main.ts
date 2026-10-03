@@ -1,7 +1,7 @@
 import {App, MarkdownView, Modal, Notice, Plugin, Setting, TAbstractFile, TFile} from "obsidian";
 import {EditorView, ViewUpdate} from "@codemirror/view";
 import {EditorState, Transaction, Extension} from "@codemirror/state";
-import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab} from "./settings";
+import {DEFAULT_SETTINGS, ExternalDiffSettings, ExternalDiffSettingTab, manualEditorEvents} from "./settings";
 import {DiffView, DIFF_VIEW_TYPE, PendingDiff} from "./DiffView";
 import {PersistedDiffEntry, restoreReview} from "./reviewDraft";
 import {EXPORT_TEXT_VIEW, ExportTextView} from "./export/ExportTextView";
@@ -16,6 +16,7 @@ import {CreationQueue} from "./creationQueue";
 import {ReviewOperations} from "./reviewOperations";
 import {FileLifecycle} from "./fileLifecycle";
 import {ProgrammaticEdits} from "./programmaticEdits";
+import {DebugLog} from "./debugLog";
 import {EditorSaves} from "./editorSaves";
 
 interface PersistedData {
@@ -26,6 +27,11 @@ interface PersistedData {
 
 /** How long an internal-write mark stays valid before the CM6 "set" it announces must have arrived. */
 const INTERNAL_WRITE_MARK_TTL_MS = 2000;
+
+/** Prefer explicit typing/history annotations over the route through Editor API. */
+function isManualEditorTransaction(tr: Transaction, events: readonly string[]): boolean {
+	return events.some(event => tr.isUserEvent(event));
+}
 
 /** Extract the CM6 EditorView from a MarkdownView (internal Obsidian API). */
 function getCmEditor(mdView: MarkdownView): EditorView | undefined {
@@ -39,11 +45,19 @@ function getCmEditor(mdView: MarkdownView): EditorView | undefined {
 
 export default class ExternalDiffPlugin extends Plugin {
 	settings: ExternalDiffSettings;
+	private manualEvents = manualEditorEvents(DEFAULT_SETTINGS.manualEditorEvents);
 	private pendingDiffs = new Map<string, PendingDiff>();
 	private baselines = new Map<string, string>();
 	private selfModifyPaths = new Set<string>();
 	private typingContents = new EditorSaves();
-	private programmaticEdits = new ProgrammaticEdits();
+	debugLog = new DebugLog(() => !!this.settings?.debug, () => ({
+		detection: this.settings.enabled,
+		otherEditor: this.settings.trackInAppChanges,
+		editorApi: this.settings.trackProgrammaticChanges,
+		fileApi: this.settings.trackApiChanges,
+		manualEvents: this.manualEvents,
+	}), message => { new Notice(message, 12000); });
+	private programmaticEdits = new ProgrammaticEdits((event, details) => this.debugLog.write(event, details), () => !!this.settings?.debug);
 	private internalWritePaths = new Map<string, number>();
 	private pendingEditWarning = new Set<string>();
 	private savedBaselines: [string, string][] | undefined;
@@ -73,8 +87,15 @@ export default class ExternalDiffPlugin extends Plugin {
 		});
 	}
 
+	startDebugMonitoring(): void {
+		this.debugLog.monitor(document, () => this.app.workspace.getActiveFile()?.path);
+	}
+
 	async onload() {
 		await this.loadSettings();
+		this.register(() => { void this.debugLog.stop(); });
+		if (this.settings.debug) this.startDebugMonitoring();
+		this.debugLog.write("plugin.loaded");
 
 		this.registerView(DIFF_VIEW_TYPE, (leaf) => new DiffView(leaf, this.settings, () => this.renameMatcher?.status ?? ""));
 		this.registerView(EXPORT_TEXT_VIEW, leaf => new ExportTextView(leaf));
@@ -169,6 +190,8 @@ export default class ExternalDiffPlugin extends Plugin {
 	async loadSettings() {
 		const data: PersistedData = ((await this.loadData()) as PersistedData | null) ?? {};
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings ?? {});
+		if (typeof this.settings.manualEditorEvents !== "string") this.settings.manualEditorEvents = DEFAULT_SETTINGS.manualEditorEvents;
+		this.manualEvents = manualEditorEvents(this.settings.manualEditorEvents);
 		this.settings.trackFileRenames = this.settings.trackFileDeletions = !!(this.settings.trackFileRenames || this.settings.trackFileDeletions);
 		try { formatExportFilename(this.settings.exportFilenameTemplate); }
 		catch { this.settings.exportFilenameTemplate = DEFAULT_SETTINGS.exportFilenameTemplate; }
@@ -178,6 +201,8 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	async saveSettings() {
+		this.manualEvents = manualEditorEvents(this.settings.manualEditorEvents);
+		this.debugLog.write("settings.changed");
 		this.renameMatcher?.schedule();
 		for (const leaf of this.app.workspace.getLeavesOfType(DIFF_VIEW_TYPE)) {
 			if (leaf.view instanceof DiffView) leaf.view.updateSettings();
@@ -335,11 +360,12 @@ export default class ExternalDiffPlugin extends Plugin {
 
 				const path = this.getPathForEditorState(tr.startState);
 				if (!path || !this.pendingDiffs.has(path)) return tr;
-				if (this.programmaticEdits.isActive(path)) return tr;
+				if (this.programmaticEdits.isActive(path) && !isManualEditorTransaction(tr, this.manualEvents)) return tr;
 				const pending = this.pendingDiffs.get(path)!;
 				if (pending.internalReview && pending.draftContent === pending.newContent && !pending.conflicted) return tr;
 				if (this.pendingEditWarning.has(path)) return [];
 
+				this.debugLog.write("editor.blocked-by-review", () => ({path, userEvent: tr.annotation(Transaction.userEvent)}));
 				this.pendingEditWarning.add(path);
 				new EditWarningModal(this.app, () => {
 					this.pendingEditWarning.delete(path);
@@ -354,6 +380,12 @@ export default class ExternalDiffPlugin extends Plugin {
 
 			EditorView.updateListener.of((update: ViewUpdate) => {
 				if (!update.docChanged) return;
+				this.debugLog.write("editor.update", () => {
+					const path = this.getPathForEditorView(update.view);
+					return {path, programmatic: !!path && this.programmaticEdits.isActive(path),
+						userEvents: update.transactions.map(tr => tr.annotation(Transaction.userEvent) ?? null),
+						beforeLength: update.startState.doc.length, afterLength: update.state.doc.length};
+				});
 				if (!this.settings.enabled) return;
 
 				const path = this.getPathForEditorView(update.view);
@@ -361,6 +393,7 @@ export default class ExternalDiffPlugin extends Plugin {
 
 				// Check if this is our own vault.modify
 				if (this.selfModifyPaths.has(path)) {
+					this.debugLog.write("editor.ignored", () => ({path, reason: "Drift self-write"}));
 					this.selfModifyPaths.delete(path);
 					this.baselines.set(path, update.state.doc.toString());
 					return;
@@ -378,17 +411,27 @@ export default class ExternalDiffPlugin extends Plugin {
 					// A fresh mark means this "set" is Obsidian syncing an in-app
 					// API write into the editor, not an external change.
 					if (this.consumeInternalWriteMark(path)) {
+						this.debugLog.write("editor.ignored", () => ({path, reason: "file API synchronization handled by vault event"}));
 						this.baselines.set(path, update.state.doc.toString());
 						return;
 					}
 					const newContent = update.state.doc.toString();
 					const oldContent = this.baselines.get(path);
+					this.debugLog.write("editor.classified", () => ({path, source: "external-sync", baselineKnown: oldContent !== undefined}));
 					if (oldContent !== undefined && (oldContent !== newContent || this.pendingDiffs.has(path))) {
 						this.handleExternalChange(path, oldContent, newContent);
 					}
 				} else {
 					this.renameMatcher?.observe(path, update.state.doc.toString());
-					const programmatic = this.programmaticEdits.isActive(path);
+					const apiCallActive = this.programmaticEdits.isActive(path);
+					const manual = update.transactions.filter(tr => tr.docChanged).every(tr => isManualEditorTransaction(tr, this.manualEvents));
+					const programmatic = apiCallActive && !manual;
+					this.debugLog.write("editor.classified", () => ({path,
+						apiCallActive, manualAnnotation: manual,
+						reason: apiCallActive && manual ? "explicit manual annotation overrides API route" : "API route classification",
+						source: programmatic ? "editor-api" : "other-editor",
+						reviewEnabled: programmatic ? this.settings.trackProgrammaticChanges : this.settings.trackInAppChanges,
+						baselineKnown: this.baselines.has(path)}));
 					if (programmatic ? this.settings.trackProgrammaticChanges : this.settings.trackInAppChanges) {
 						const previous = this.baselines.get(path);
 						if (previous !== undefined) this.handleExternalChange(path, previous, update.state.doc.toString(), !programmatic);
@@ -481,6 +524,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		const path = file.path;
 		const stillCurrent = () => !this.disposed && file.path === path && this.app.vault.getAbstractFileByPath(path) === file;
 		const internal = origin ?? !!(file as TFile & {saving?: boolean}).saving;
+		this.debugLog.write("vault.modify", () => ({path, internal, openInEditor: this.isFileOpenInEditor(path), initializing: this.initializing}));
 		if (this.initializing) { this.startupEvents.push(() => { void this.handleModify(file, internal); }); return; }
 		if (this.disposed) return;
 		if (!this.settings.enabled) {
@@ -508,6 +552,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			const current = await this.app.vault.cachedRead(file);
 			if (!stillCurrent()) return;
 			if (!isSelfWrite && this.typingContents.consume(file.path, current)) {
+				this.debugLog.write("vault.ignored", () => ({path, reason: "recognized editor autosave", length: current.length}));
 				// The editor already established its baseline. An older autosave
 				// must neither rewind it nor create a reverse review.
 				this.persistState();
@@ -515,6 +560,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			}
 			this.typingContents.delete(file.path);
 			if (!isSelfWrite && this.settings.trackApiChanges) {
+				this.debugLog.write("vault.classified", () => ({path, source: "file-api", length: current.length}));
 				const before = this.baselines.get(file.path);
 				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);
 				this.baselines.set(file.path, current);
@@ -522,6 +568,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				return;
 			}
 			// Ignoring an API write must not silently accept a previous external review.
+			this.debugLog.write("vault.ignored", () => ({path, reason: isSelfWrite ? "Drift self-write" : "file API review disabled"}));
 			this.baselines.set(file.path, current);
 			const pending = this.pendingDiffs.get(file.path);
 			if (pending && !isSelfWrite) {
@@ -536,7 +583,10 @@ export default class ExternalDiffPlugin extends Plugin {
 		}
 
 		// Skip if file is open in an editor (CM6 listener handles it)
-		if (this.isFileOpenInEditor(file.path)) return;
+		if (this.isFileOpenInEditor(file.path)) {
+			this.debugLog.write("vault.deferred-to-editor", () => ({path}));
+			return;
+		}
 
 		const newContent = await this.app.vault.read(file);
 		if (!stillCurrent()) return;
@@ -655,6 +705,9 @@ export default class ExternalDiffPlugin extends Plugin {
 
 	/** Handle an external file change, optionally focusing the diff tab. */
 	private handleExternalChange(path: string, oldContent: string, newContent: string, internal = false, created = false): void {
+		this.debugLog.write("review.received", () => ({path, internal, created,
+			originalLength: oldContent.length, resultLength: newContent.length,
+			programmatic: this.programmaticEdits.isActive(path), existing: this.pendingDiffs.has(path)}));
 		if (!internal && !this.programmaticEdits.isActive(path)) this.typingContents.delete(path);
 		this.renameMatcher?.observe(path, newContent);
 		this.baselines.set(path, newContent);
@@ -665,12 +718,16 @@ export default class ExternalDiffPlugin extends Plugin {
 			return;
 		}
 		if (previous && (previous.draftContent !== previous.newContent || previous.conflicted)) {
+			this.debugLog.write("review.draft-preserved", () => ({path, conflicted: previous.newContent !== newContent}));
 			previous.conflicted = previous.newContent !== newContent;
 			this.getExistingDiffView()?.updateReviewStatus(path);
 			this.persistState();
 			return;
 		}
-		if (previous?.newContent === newContent) return;
+		if (previous?.newContent === newContent) {
+			this.debugLog.write("review.unchanged", () => ({path}));
+			return;
+		}
 		const diff = this.makeDiffCallbacks(path, previous?.oldContent ?? oldContent, newContent);
 		diff.originalPath = previous?.originalPath;
 		diff.created = previous?.created ?? created;
@@ -678,6 +735,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		diff.renameSources = previous?.renameSources ?? [...this.pendingDiffs].filter(([, review]) => review.renameCandidates?.some(candidate => candidate.path === path)).map(([source]) => source);
 		diff.matchContent = newContent;
 		this.pendingDiffs.set(path, diff);
+		this.debugLog.write("review.updated", () => ({path, internalReview: internal, created, hadPrevious: !!previous}));
 		this.persistState();
 
 		if (this.initializing) return;

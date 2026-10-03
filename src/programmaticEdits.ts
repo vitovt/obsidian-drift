@@ -8,6 +8,9 @@ export class ProgrammaticEdits {
 	private editors = new Map<Editor, () => void>();
 	private active = new Map<string, number>();
 	private disposed = false;
+	private callSequence = 0;
+	constructor(private trace: (event: string, details: () => Record<string, unknown>) => void = () => {},
+		private debugging: () => boolean = () => false) {}
 
 	sync(editors: {editor: Editor; path: () => string | undefined}[]): void {
 		if (this.disposed) return;
@@ -30,8 +33,17 @@ export class ProgrammaticEdits {
 					const currentPath = path();
 					if (tracker.disposed || !currentPath) return original.apply(this, args);
 					tracker.active.set(currentPath, (tracker.active.get(currentPath) ?? 0) + 1);
+					const debug = tracker.debugging();
+					const callId = debug ? ++tracker.callSequence : 0;
+					const started = debug ? performance.now() : 0;
+					if (debug) tracker.trace("editor-api.begin", () => ({
+						path: currentPath, method: name, callId,
+						depth: tracker.active.get(currentPath),
+						stack: new Error("Editor API caller").stack,
+					}));
 					try { return original.apply(this, args); }
 					finally {
+						if (debug) tracker.trace("editor-api.end", () => ({path: currentPath, method: name, callId, durationMs: performance.now() - started}));
 						const depth = tracker.active.get(currentPath)! - 1;
 						if (depth) tracker.active.set(currentPath, depth);
 						else tracker.active.delete(currentPath);

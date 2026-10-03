@@ -1,13 +1,21 @@
-import {App, PluginSettingTab, Setting} from "obsidian";
+import {App, Notice, PluginSettingTab, Setting} from "obsidian";
 import type ExternalDiffPlugin from "./main";
 import {DEFAULT_EXPORT_TEMPLATE} from "./export/filename";
 import {addExportSettings} from "./export/settings";
 
+export const DEFAULT_MANUAL_EDITOR_EVENTS = "input.type\ninput.paste\ndelete\nundo\nredo";
+
+export function manualEditorEvents(value: string): string[] {
+	return [...new Set(value.split(/\r?\n/).map(event => event.trim()).filter(Boolean))];
+}
+
 export interface ExternalDiffSettings {
+	debug: boolean;
 	enabled: boolean;
 	trackInAppChanges: boolean;
 	trackApiChanges: boolean;
 	trackProgrammaticChanges: boolean;
+	manualEditorEvents: string;
 	reviewWhileClosed: boolean;
 	reviewNewFiles: boolean;
 	trackFileRenames: boolean;
@@ -23,10 +31,12 @@ export interface ExternalDiffSettings {
 }
 
 export const DEFAULT_SETTINGS: ExternalDiffSettings = {
+	debug: false,
 	enabled: true,
 	trackInAppChanges: false,
 	trackApiChanges: true,
 	trackProgrammaticChanges: true,
+	manualEditorEvents: DEFAULT_MANUAL_EDITOR_EVENTS,
 	reviewWhileClosed: true,
 	reviewNewFiles: false,
 	trackFileRenames: false,
@@ -76,7 +86,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 			.setDesc("Drift's main purpose: review Markdown file changes made by external editors, AI agents, scripts, and sync tools such as Dropbox. Always monitored while change detection is enabled; no separate switch is needed. New files, renames, and deletions follow the file options below.");
 
 		for (const [key, name, description] of [
-			["trackInAppChanges", "Review other editor changes", "Include typing, pasting, and editor changes not recognized as Editor API calls. Plugins that modify CodeMirror directly also fall into this group. Off by default."],
+			["trackInAppChanges", "Review other editor changes (probably not needed)", "Include typing, pasting, and editor changes not recognized as Editor API calls, including events listed as manual below. Plugins that modify CodeMirror directly also fall into this group. Leave off to ignore these changes."],
 			["trackProgrammaticChanges", "Review Editor API changes (experimental)", "Include programmatic edits through Editor API methods, such as automatic link-title formatting. Plugins and Obsidian itself can use these methods; this does not identify the author. Direct CodeMirror changes and calls before an editor is attached may not be recognized. Enabled by default on this experimental branch."],
 			["trackApiChanges", "Review file API operations", "Include content changes and file operations made through Obsidian's file APIs by plugins, integrations, or Obsidian itself. Editor API calls follow Review Editor API changes instead; other editor edits follow Review other editor changes. New files, renames, and deletions also follow the options below. The source cannot always be identified."],
 			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Changes found at startup cannot be attributed to an editor or plugin. Disable to remove checkpoints on the next save."],
@@ -86,6 +96,29 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					this.plugin.settings[key] = value;
 					await this.plugin.saveSettings();
 				}));
+			if (key === "trackProgrammaticChanges") {
+				let resetText = () => {};
+				new Setting(sources)
+					.setName("Treat these events as manual edits")
+					.setDesc("One event per line, as shown in the debug log's userEvents field. Matching events follow Review other editor changes, even inside an Editor API call; leave that option off to ignore them. A name also matches its dot-separated subtypes: delete includes delete.backward. Case-sensitive, no wildcards. Empty means no exceptions. This filters event types, not individual plugins; events without a marker do not match.")
+					.addTextArea(text => {
+						text.setValue(this.plugin.settings.manualEditorEvents);
+						text.inputEl.rows = 6;
+						text.inputEl.cols = 25;
+						text.inputEl.spellcheck = false;
+						text.inputEl.setAttribute("aria-label", "Events treated as manual edits");
+						resetText = () => { text.setValue(DEFAULT_MANUAL_EDITOR_EVENTS); };
+						text.onChange(async value => {
+							this.plugin.settings.manualEditorEvents = value;
+							await this.plugin.saveSettings();
+						});
+					})
+					.addButton(button => button.setButtonText("Restore defaults").onClick(async () => {
+						this.plugin.settings.manualEditorEvents = DEFAULT_MANUAL_EDITOR_EVENTS;
+						resetText();
+						await this.plugin.saveSettings();
+					}));
+			}
 		}
 
 		const files = section("New files, renames, and deletions");
@@ -158,5 +191,29 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					}));
 		}
 		addExportSettings(section("Diff export"), this.plugin);
+		const diagnostics = section("Diagnostics");
+		new Setting(diagnostics)
+			.setName("Debug logging")
+			.setDesc("Write a temporary events.jsonl file in the system temp directory. Includes Editor API call stacks, input event types, file paths, active settings, and review decisions, but no note text, typed characters, or clipboard contents. Each enable starts a new log. Disable after reproducing the issue; existing logs remain until you or the system removes them.")
+			.addToggle(toggle => toggle.setValue(this.plugin.settings.debug).onChange(async value => {
+				if (!value) this.plugin.debugLog.write("debug.disabling");
+				if (value) await this.plugin.debugLog.start();
+				this.plugin.settings.debug = value;
+				if (value) this.plugin.startDebugMonitoring();
+				this.plugin.debugLog.write("debug.enabled");
+				if (!value) await this.plugin.debugLog.stop();
+				await this.plugin.saveSettings();
+			}));
+		new Setting(diagnostics)
+			.setName("Debug log location")
+			.setDesc("Copy the full path to the current session's log, including after debug logging is turned off.")
+			.addButton(button => button.setButtonText("Copy log path").onClick(async () => {
+				try {
+					const path = await this.plugin.debugLog.location();
+					if (!path) { new Notice("Enable debug logging first."); return; }
+					await navigator.clipboard.writeText(path);
+					new Notice(`Debug log path copied: ${path}`, 10000);
+				} catch { new Notice("Could not copy the log path. Check that the temp directory is writable."); }
+			}));
 	}
 }
