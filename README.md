@@ -4,6 +4,14 @@ Review changes to Markdown notes in one place inside Obsidian. Drift compares th
 
 ![Drift demo](demo.gif)
 
+## Selecting reviews and confirming renames
+
+Use the checkbox beside a file to limit **Keep selected** and **Restore selected** to selected reviews. With no selection, those buttons apply to all reviews. The compact **Clear selection** icon beside Expand/Collapse returns to that all-files scope. Unresolved rename decisions and other existing safety exclusions still apply; export continues to include all eligible reviews independently of selection.
+
+Possible renames show **From → To** paths. **Confirm rename** associates the displayed candidate directly; **Review match…** opens the content comparison first. Both actions validate the current file and protect unfinished drafts. Only filenames are bold; folder paths use regular text. When both files share a folder, the destination after the arrow shows only its filename. Copy-path icons still copy the full paths. Confirmed renames also show the old and current paths in the file header.
+
+**Undo association** reopens the rename decision; it does not move files. New confirmations save the pre-association review snapshots, so undo remains available after restart and later content updates. Edited drafts are preserved; editor undo/redo history remains session-only. Older renames without saved association history show a disabled Undo button with an explanation. Undo is blocked if the associated file is missing, the paths have changed, or another file/review occupies the source path. Deletion actions remain disabled until you confirm a rename again or choose **Treat as separate files**, including after a restart. Once treated separately, **Restore file** restores the old path and **Keep deletion** leaves that path deleted; neither changes the other file.
+
 ## What gets reviewed
 
 | Setting | Default | Behavior |

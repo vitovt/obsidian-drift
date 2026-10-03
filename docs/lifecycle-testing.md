@@ -74,3 +74,18 @@ Use a disposable vault. Run `npm run build`, copy `main.js`, `manifest.json`, an
 ## Automated checks
 
 Run `npm run test:review`, `npm run test:diff`, `npm run test:export`, `npm run build`, and `npm run lint`. Run `npm run bench:rename` for the reproducible matching workload. See [performance results](rename-performance.md) for the measured environment and limits; the benchmark does not render the Obsidian UI.
+
+## Selection and compact rename controls
+
+- Select two of several reviews. Check that Keep/Restore labels and counts reflect only those reviews, and that other reviews remain open after either action. Clear selection and check that the scope returns to all files.
+- Select a review, then trigger a file update or confirm its rename. Check that selection follows the review. Opening a restoration confirmation must retain its original scope if selection changes afterward.
+- Confirm a suggested rename directly, then undo it. Check that deletion actions stay disabled until another rename/separate decision. Restart with this decision pending and check the same protection.
+- Change or remove a rename target before confirming directly; confirm that stale content or missing files cannot be associated silently. A target with an edited draft must remain protected.
+- Open Review match, select another candidate, and copy each path. Check From/To direction and clipboard contents. Check long paths in collapsed and expanded headers and a narrow pane.
+
+## Persistent association undo
+
+- Confirm a rename, reload the plugin, then undo the association. Check the original deletion review and any absorbed target review are restored without moving files.
+- Edit the associated file externally before undoing; the button should remain available. Repeat with an edited Result draft and confirm the draft is retained.
+- Create a file at the old path before undoing: the action must explain the conflict and leave both files and reviews intact.
+- Older saved renames without undo snapshots should show a disabled button with an explanation.
