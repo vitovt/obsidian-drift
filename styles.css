@@ -415,3 +415,9 @@ body:has(.diff-view-filepath:hover) .tooltip {
 .drift-settings-section > .setting-item:first-child {
 	border-top: none;
 }
+
+.drift-settings-editor-events {
+	margin-inline-start: 16px;
+	padding-inline-start: 12px;
+	border-inline-start: 2px solid var(--background-modifier-border);
+}
