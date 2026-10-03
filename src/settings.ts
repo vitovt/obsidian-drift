@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	trackInAppChanges: false,
 	trackApiChanges: true,
-	trackProgrammaticChanges: true,
+	trackProgrammaticChanges: false,
 	manualEditorEvents: DEFAULT_MANUAL_EDITOR_EVENTS,
 	reviewWhileClosed: true,
 	reviewNewFiles: false,
@@ -83,22 +83,27 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 
 		new Setting(sources)
 			.setName("Changes outside Obsidian — always included")
-			.setDesc("Drift's main purpose: review Markdown file changes made by external editors, AI agents, scripts, and sync tools such as Dropbox. Always monitored while change detection is enabled; no separate switch is needed. New files, renames, and deletions follow the file options below.");
+			.setDesc("Drift's main purpose: review Markdown file changes made by external editors, AI agents, scripts, and sync tools such as Dropbox. Always monitored while change detection is enabled. This fixed indicator cannot be switched off separately. New files, renames, and deletions follow the file options below.")
+			.addToggle(toggle => toggle.setValue(true).setDisabled(true));
 
 		for (const [key, name, description] of [
 			["trackInAppChanges", "Review other editor changes (probably not needed)", "Include typing, pasting, and editor changes not recognized as Editor API calls, including events listed as manual below. Plugins that modify CodeMirror directly also fall into this group. Leave off to ignore these changes."],
-			["trackProgrammaticChanges", "Review Editor API changes (experimental)", "Include programmatic edits through Editor API methods, such as automatic link-title formatting. Plugins and Obsidian itself can use these methods; this does not identify the author. Direct CodeMirror changes and calls before an editor is attached may not be recognized. Enabled by default on this experimental branch."],
+			["trackProgrammaticChanges", "Review Editor API changes (experimental)", "Include programmatic edits through Editor API methods, such as automatic link-title formatting. Plugins and Obsidian itself can use these methods; this does not identify the author. Direct CodeMirror changes and calls before an editor is attached may not be recognized. Off by default."],
 			["trackApiChanges", "Review file API operations", "Include content changes and file operations made through Obsidian's file APIs by plugins, integrations, or Obsidian itself. Editor API calls follow Review Editor API changes instead; other editor edits follow Review other editor changes. New files, renames, and deletions also follow the options below. The source cannot always be identified."],
 			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Changes found at startup cannot be attributed to an editor or plugin. Disable to remove checkpoints on the next save."],
 		] as const) {
+			let eventsBlock: HTMLElement | undefined;
 			new Setting(sources).setName(name).setDesc(description)
 				.addToggle(toggle => toggle.setValue(this.plugin.settings[key]).onChange(async value => {
 					this.plugin.settings[key] = value;
+					if (eventsBlock) eventsBlock.style.display = value ? "" : "none";
 					await this.plugin.saveSettings();
 				}));
 			if (key === "trackProgrammaticChanges") {
+				eventsBlock = sources.createDiv({cls: "drift-settings-editor-events"});
+				eventsBlock.style.display = this.plugin.settings.trackProgrammaticChanges ? "" : "none";
 				let resetText = () => {};
-				new Setting(sources)
+				new Setting(eventsBlock)
 					.setName("Treat these events as manual edits")
 					.setDesc("One event per line, as shown in the debug log's userEvents field. Matching events follow Review other editor changes, even inside an Editor API call; leave that option off to ignore them. A name also matches its dot-separated subtypes: delete includes delete.backward. Case-sensitive, no wildcards. Empty means no exceptions. This filters event types, not individual plugins; events without a marker do not match.")
 					.addTextArea(text => {
