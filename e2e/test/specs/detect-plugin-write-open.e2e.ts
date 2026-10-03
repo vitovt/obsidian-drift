@@ -2,6 +2,7 @@ import ObsidianApp from "../pageobjects/ObsidianApp";
 
 describe("External change detection", () => {
   it("should NOT open diff tab when a plugin writes an open file via vault.modify", async () => {
+    await ObsidianApp.setReviewSettings({trackApiChanges: false});
     await ObsidianApp.createNewNote("Original content");
     const filePath = await ObsidianApp.getActiveFilePath();
 

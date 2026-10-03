@@ -1,112 +1,128 @@
 # Drift
 
-A VS Code-style side-by-side diff viewer that lives inside Obsidian. Automatically detects external file changes (including AI coding agents) and shows you a before/after view with per-chunk accept/reject, accept all/reject all, and collapsible unchanged regions.
+Review changes to Markdown notes in one place inside Obsidian. Drift compares the previous text with changes from external editors, AI agents, scripts, plugins, and synchronization tools, and lets you keep the current file, restore the original, or edit a result draft before saving.
 
 ![Drift demo](demo.gif)
 
-## Features
+## What gets reviewed
 
-- **Instant detection** — No polling or delays. Uses CodeMirror 6 transaction monitoring to detect external changes the moment they happen.
-- **Editable review drafts** — Restore individual blocks or edit the result manually, with Undo/Redo, before applying the result to the file.
-- **Reject all changes / Accept all changes** — Bulk actions when you have multiple files with pending diffs.
-- **Persistence** — Pending diffs and edited drafts survive Obsidian restarts. Drafts are preserved if the file changes again; obsolete unedited reviews are discarded on reload.
-- **Edit protection** — Editing a file with pending diffs shows a warning modal, preventing accidental data loss.
-- **Tool-agnostic** — Works with any tool that modifies vault files: AI coding agents, sync services, scripts, other plugins.
+| Setting | Default | Behavior |
+| --- | --- | --- |
+| Enable change detection | On | Review changes to known Markdown files. |
+| Review newly created files | **Off** | New files establish a baseline and remain eligible for rename matching. Later edits are reviewed. Enable to review the initial creation too. |
+| Ignore changes to empty files | Off | When enabled, the first content written to a zero-character file becomes its baseline. Whitespace is not empty. Existing reviews are preserved. This is independent of reviewing new files. |
+| Review other editor changes | Off | Include typing, pasting, and changes not recognized as Editor API calls, including plugins that modify CodeMirror directly. |
+| Review Editor API changes (experimental) | Off | Review programmatic calls through supported Editor API methods, including link-title formatting. This identifies a write path, not the author. |
+| Review file API operations | On | Include operations through Obsidian file APIs, from plugins, integrations, or Obsidian itself. Supported Editor API calls follow **Review Editor API changes**; other editor changes follow **Review other editor changes**. |
+| Review changes made while closed | On | Store local Markdown content checkpoints and compare them during the next startup. |
+| Track renames and deletions (experimental) | Off | Review missing files and suggest possible renames. |
 
-## Installation
+New-file events settle for 250 ms of inactivity (up to two seconds) so an empty creation event followed immediately by copied contents establishes one baseline. Edits after that settling period are reviewed.
 
-Install Drift from the [Obsidian community plugin directory](https://community.obsidian.md/plugins/drift).
+For example, with the defaults, copying `notes.md` into the vault creates **no review**. Editing it afterward creates a content review. If the copied file is a possible destination for a missing note, it can still appear as a rename candidate. Enabling **Ignore changes to empty files** additionally skips the first fill of an empty file.
 
-### Manual install
+Origin detection uses editor transactions and file APIs. It cannot reliably identify every tool or distinguish an Obsidian file operation from a plugin using the same API. Unknown filesystem writes are treated as external. Disabling API review does not dismiss an existing external review: a later API write can instead mark it as needing a fresh comparison. An AI tool writing through an Obsidian API is covered by API review; one writing directly to disk is covered by external detection.
 
-1. Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/ryanbbrown/obsidian-drift/releases)
-2. Create a folder `VaultFolder/.obsidian/plugins/drift/`
-3. Copy the downloaded files into that folder
-4. Restart Obsidian and enable the plugin in **Settings → Community plugins**
+On the `experimental/programmatic-editor-reviews` branch, **Review Editor API changes (experimental)** wraps `replaceRange`, `replaceSelection`, `setValue`, and `transaction` on open Markdown editors. For example, an existing plain URL followed by an API replacement produces Original = URL and Result = Markdown link. Successive plugin replacements continue the same review and preserve edited Result drafts. The option defaults off; existing saved preferences are retained. Its event-list controls are shown only while it is enabled, with their contents preserved when hidden. The fixed, disabled toggle beside **Changes outside Obsidian** indicates that external changes are always included while global detection is enabled.
 
-### Build and test locally
+This is partial classification, not plugin attribution. Obsidian itself can call these APIs, including in response to user actions. Plugins that dispatch directly to CodeMirror, retained method references that bypass the wrappers, and calls before an editor is attached may not be recognized. A paste plugin can insert a placeholder through the API before fetching its title; that initial insertion can also be reviewed. There is no promise that every paste plugin produces a plain-URL baseline. Disabling API review does not discard an existing review.
 
-1. Run `npm ci` in the repository to install the locked dependencies.
-2. Run `npm run build` to type-check and generate `main.js`.
-3. Copy `main.js`, `manifest.json`, and `styles.css` into your test vault's `.obsidian/plugins/drift/` folder.
-4. Disable and re-enable Drift in **Settings → Community plugins** to load the new build.
+**Treat these events as manual edits**, below the Editor API toggle, controls which transaction annotations take precedence over the API route. Defaults are `input.type`, `input.paste`, `delete`, `undo`, and `redo`, one per line. Names are case-sensitive and match dot-separated subtypes (`delete` also matches `delete.backward`); wildcards are not supported. Blank lines and duplicate names are ignored. An empty field removes all exceptions. **Restore defaults** restores the initial list; changes apply immediately and persist across restarts.
 
-Repeat steps 2–4 after each change. `npm run dev` rebuilds automatically when source files change; you still need to copy the files and reload the plugin. Generated `main.js` is excluded from Git.
+Matching changes follow **Review other editor changes (probably not needed)**. Leave that toggle off to ignore them. This covers annotated typing, ordinary paste, and Markdown list continuation; a later unannotated Better Paste transformation can still create a review against the text you pasted. Plugins supplying matching annotations also follow the other-editor toggle: this is an event filter, not a plugin blacklist. Events without an annotation do not match. Copy additional names from `userEvents` in [the debug log](docs/editor-debug.md); debug defaults off.
 
-Run `npm run test:review` for draft persistence, history, and conflict checks without launching Obsidian. These tests mock vault operations; interactive scenarios live in `e2e/test/specs/`.
+Wrappers mark only their synchronous call scope, support nested calls, and are restored on editor removal or plugin unload without replacing another plugin's newer wrapper. No stack inspection, vault scan, or new filesystem watcher is added. Drift also recognizes recent editor versions when delayed autosaves arrive, so an earlier URL save does not become a reverse review. Autosave matching is bounded to 64 versions and 8 Mi characters across files, with a 10-second lifetime.
 
-Run `npm run test:diff` for word-level highlighting regressions, including sparse edits across large documents and incremental draft changes.
+The first run establishes the checkpoint; it cannot recover changes made before installation. With checkpoints enabled, subsequent startup compares the current vault against the last saved observations, including changes delivered by Dropbox while Obsidian was closed. It reuses the startup Markdown scan, with four concurrent reads. Read failures keep the previous checkpoint and saved drafts and show a retry notice. There is no additional filesystem watcher or continuous polling.
 
-Run `npm run test:export` for export tests. These require Git and GNU patch on your PATH: generated patches are applied to temporary files and their contents compared with the expected results. Vault writes and file-opening routes are tested with mocks.
+Checkpoint text and review drafts are stored in the plugin's `data.json` inside the vault configuration folder. No telemetry or network requests are made by Drift. If your sync tool includes that folder, it can sync this data too. Disabling **Review changes made while closed** removes checkpoints on the next save; pending reviews and drafts remain. Saves are serialized and scheduled within about 500 ms of changes; an abrupt process or storage failure can lose state not yet saved. Checkpoints are observations, not a version history or backup.
 
-## Usage
+## Review actions
 
-Once enabled, the plugin runs automatically. When an external tool modifies a markdown file in your vault:
+The left pane shows **Original**. The right pane shows **Result (Editable)**. Restoring a block with the arrow, typing in Result, and Undo/Redo change the draft only.
 
-1. A **Drift** tab opens in the background showing the side-by-side diff
-2. Compare **Original** on the left with **Result (Editable)** on the right
-3. Edit the result or select **Restore original block** (`→`) to copy a block from left to right. These actions change the draft only; the file stays untouched until **Accept**. Use **Undo** / **Redo**, or `Ctrl+Z` / `Ctrl+Shift+Z` (`Cmd` on macOS), to revise your decisions
-4. Use the **Open diff viewer** command to reopen the tab if you close it
-5. Select **Accept** to save the result, or **Reject** to restore the original. **Reject all changes** and **Accept all changes** apply the corresponding action to each pending file
+| Situation | Actions |
+| --- | --- |
+| Content changed | **Keep current** acknowledges the file without writing. **Restore original** restores the previous contents. |
+| Draft edited | **Save result** writes the draft after checking that the file has not changed again. |
+| File renamed | **Keep rename** keeps its current path. **Restore original path** reverses a pure rename. For a rename with content changes, **Restore original** restores both contents and path. |
+| File deleted | **Keep deletion** leaves it deleted. **Restore file** recreates the original. If a content draft existed, **Save result** can recreate that draft. |
+| File missing without deletion metadata | **Restore result**, **Restore original**, or **Discard review**. Discarding a review asks before removing its saved draft. |
+| New-file review enabled | **Keep new file**, **Save result** after editing, or **Move new file to trash**, using Obsidian's deletion preference. |
 
-Restoring every block keeps the review open so you can undo or explicitly accept it. Draft text is saved in the plugin's local data and restored after restarting Obsidian. Undo history survives collapsing/reopening views and changing the diff algorithm within the current plugin session; it resets on plugin reload or when starting a comparison against a newer disk version.
+Keeping a deletion asks before discarding an edited draft. Restoring a missing file creates missing parent folders and never overwrites an occupied path. Restoring a renamed path requires its original parent folder to exist and the destination to be free. Case-only restoration may be blocked on case-insensitive filesystems. Content writes and path changes are separate operations; a partial failure leaves the review available with an error explaining what to check. Drift uses `Vault.rename` and does not additionally update links in other notes.
 
-If the file changes again while you have an edited draft, Drift keeps the draft and shows **Review latest changes**. Selecting it puts the latest disk version on the left and your draft on the right without writing anything. Review the differences before accepting; **Reject** now keeps that latest comparison baseline. Both Accept and Reject check the disk version before writing, and failed or conflicting files remain open even during bulk actions.
+**Keep all current** never writes files. It skips edited drafts, missing files requiring recovery, conflicts, and unresolved rename associations. **Restore originals…** shows a confirmation with counts for affected files, renames, deletions, new files to trash, and drafts to discard. It restores original contents **and paths** consistently. Unresolved associations and content conflicts remain open. Completion messages report skipped and remaining reviews, including failures. The toolbar displays ready, draft, rename-decision, and unavailable counts.
 
-The toolbar centers **Reject all changes** and **Accept all changes**, separate from the right-aligned per-file actions. Reject comes first in both places, matching Original on the left and Result on the right. Hover over bulk actions for their descriptions. The icons on the left expand or collapse all file sections; hover over them for labels. Collapsing a file keeps its editor and current edits intact.
+If the file changes while you have an edited draft, Drift keeps the draft and shows **Review latest changes**. This starts a comparison with the latest disk text on the left and your saved draft on the right. It does not write the file. The new left side becomes the baseline for **Restore original**. Undo history resets when starting that new comparison or reloading the plugin; otherwise it survives collapsing and reopening comparisons. Draft text survives restarts, including when its file has disappeared.
 
-Expanded comparisons are indented beneath their file headers. Long file paths wrap when expanded; hover over a path to read it in full, including when the section is collapsed.
+Editing a note directly while an external review is pending shows a warning before discarding that review and draft. Typing-only reviews, when enabled, do not repeatedly interrupt ordinary typing.
 
-If a reviewed file disappears from its original path, Drift displays **Original — file missing**. It does not follow renamed files. Enable **Recreate missing file** in that review to let **Accept** create the Result or **Reject** create the Original at the old path. The checkbox is off by default and also controls whether bulk actions can recreate that file. Recreation requires the original parent folder to exist and never overwrites an occupied path. If the file reappears, the checkbox resets and normal content-conflict checks apply. Reloading Drift or restarting Obsidian drops reviews whose paths are still missing, including their drafts; copy useful draft text or export the diff first.
+## Renames and synchronization
 
-Enable **Ignore changes to empty files** in plugin settings to treat the first content written to an empty file as its baseline. This is useful for external apps that create an empty file before filling it. The option is off by default, applies only to files with no existing pending review, and treats only zero-character content as empty (not whitespace). Subsequent edits are reviewed normally.
+Enable **Track renames and deletions (experimental)** for this workflow. Upgrades combine the previous separate rename/deletion settings: if either was enabled, the combined setting is enabled.
 
-In **Settings → Drift**, enable **Focus diff tab on external change** to switch to the diff tab automatically whenever an external change is detected. This is off by default, so changes open in the background unless you opt in.
+Confirmed Obsidian rename events move existing reviews to the new path, preserving their Original, draft, and session history. **Renamed from** retains the initial path through a chain of moves. Existing reviews follow recognized moves even when creating new lifecycle reviews is disabled. Folder rename events migrate existing reviews and baselines without creating one review per unchanged child.
 
-Enable **Word wrap** in the same settings to wrap long lines in both diff panes. It is off by default and applies immediately to open diff views without reloading the plugin.
+External tools can deliver a rename as deletion plus creation, in either order. Drift compares a missing file's **last known contents** with recent creations. It checks identical contents and then overlap of word-sequence fingerprints. Original and edited Result are preserved separately.
 
-When word wrap is off, horizontal scrolling in either pane automatically scrolls the other pane by the same offset. Each file comparison scrolls independently. If one pane has less content, it stops at its own edge without pulling the longer pane back.
+- A review shows its best candidate and either **Identical contents** or a **content similarity** percentage. This is evidence, not certainty.
+- Select **Review match…** to preview **Last known contents → Candidate**. A sole candidate is previewed automatically. Alternatives are ordered by similarity.
+- **Confirm rename** links the review to the already-existing destination. It does not move or modify files. Confirmation rechecks the preview and refuses to replace an independently edited destination review.
+- **Undo association** reverses that metadata decision while the same review remains open in the current session, preserving draft edits. Starting a new latest-version comparison also ends association undo. It does not move files. The undo action is not persisted across restart.
+- **Treat as separate files** dismisses automatic suggestions for that missing review. **Look for matches again** reverses the dismissal. **Select renamed file…** / **Select another file…** allow manual selection.
 
-A shared horizontal scrollbar stays at the bottom of each visible comparison, outside its vertically scrolling text, so long files can be scrolled horizontally without reaching their last line. It is hidden when word wrap is enabled or neither pane overflows.
+Unresolved sources and candidate reviews are excluded from bulk actions and export, with a visible omission count. Resolve or dismiss the association first. Disabling matching does not silently accept saved associations. Duplicate/template notes require confirmation even when their contents are identical.
 
-Enable **Word-level highlighting** to highlight changed text within lines. Drift first matches unchanged lines with patience diff, then uses CodeMirror's character diff inside each changed block. This keeps distant edits separate in long documents instead of letting a coarse character-diff fallback highlight the whole section. It is off by default. Switching the option can change chunk boundaries; open comparisons rebuild immediately, keeping the draft, selection, and undo history while collapsing unchanged regions. Word wrap works with either mode.
+Deletions wait 500 ms so temporary replacements can settle. Delete/create saves at the same path compare the replacement against the previous baseline. A returning original with unchanged contents and no edited draft clears an obsolete review. An unconfirmed external rename round trip can still leave a review for the temporary filename; the plugin does not invent an association.
 
-With word-level highlighting enabled, turn on **High-contrast word highlighting** to add dark red backgrounds to deleted text and dark green backgrounds to inserted text, both with white lettering. This optional styling applies immediately without rebuilding editors and is off by default.
+Matching uses at most eight suggestions at 80% similarity or above. Empty files are not matched; short or highly repetitive files require exact contents. Automatic fingerprints accept up to 256 Ki characters and 60,000 tokens. Recent creation candidates are bounded by 128 paths, 30 minutes since their last observation, and 2 Mi characters. Source fingerprint caching has the same count/text bounds, but **all pending missing sources are examined in batches**, including older unresolved deletions. Fingerprinting and comparison yield between batches. A visible status indicates matching in progress or candidates excluded by size/capacity limits.
+
+If deletion arrives first, its unresolved review can match a creation delivered much later. If creation expires before deletion arrives, select it manually. Saved suggestions survive restart; the transient creation cache does not. Startup checkpoint reconciliation can identify newly present paths, but changes that leave no observable difference between checkpoints cannot be reconstructed. Large reorganizations can exceed candidate retention limits. Manual preview is limited to approximately 1 MB. See [measured performance](docs/rename-performance.md) and the [testing checklist](docs/lifecycle-testing.md).
+
+## Display and navigation
+
+Drift opens in a background tab by default. Enable **Focus diff tab on external change** to switch automatically. Use **Open diff viewer** to reopen it.
+
+Comparisons support collapsible unchanged regions, per-file collapse, synchronized scrolling, and a shared horizontal scrollbar. **Word wrap** is off by default. **Word-level highlighting** uses patience diff for line alignment and character diff inside changed blocks. **High-contrast word highlighting** adds red/green backgrounds with white text. Changing the diff algorithm preserves draft text and available session history. Suggestion updates preserve existing comparison editors, selection, and scroll position.
 
 ## Export a review
 
-Select **Export diff** after the bulk review actions in the toolbar (also available for a single file). Drift exports all pending **Original → Result** comparisons, including collapsed files and regions, as one unified patch. The snapshot includes your draft edits at the moment the dialog opens; unchanged results are omitted. Exporting does not accept or reject the reviews.
+**Export diff** saves pending Original → Result comparisons as a unified patch without resolving reviews. The snapshot includes collapsed sections and edited drafts. Unchanged content-only reviews are omitted. Unresolved rename sources/candidates are excluded, with a visible count.
 
-The dialog shows an editable filename. A green message means the name is available; a red message means the existing file **will be overwritten** when you select **Export**. There is no additional overwrite popup. Drift suggests a free name with a suffix such as `-2`, which you can remove manually.
+Exports are saved in the vault root. Settings provide a filename template (`drift-%Y-%m-%d_%H-%M.diff.txt`), context lines (default `3`), and readable Unicode paths (on by default). Supported filename tokens are `%Y`, `%m`, `%d`, `%H`, `%M`, `%S`, and `%%`, using local time. Folder paths are not permitted. The dialog suggests a free filename; selecting an occupied filename shows a red overwrite message, and **Export** overwrites it without another popup.
 
-Exports are saved in the vault root. In **Settings → Drift**, configure:
+**Open after export** initially defaults on. Markdown opens in a new Obsidian tab, text in a read-only Drift tab, and other extensions through the system application. A failed open leaves the export saved.
 
-- **Export filename template** — defaults to `drift-%Y-%m-%d_%H-%M.diff.txt`. Tokens `%Y`, `%m`, `%d`, `%H`, `%M`, and `%S` use local date/time; `%%` produces a literal percent sign. Folder paths are not allowed. Editing the name in the export dialog affects only that export.
-- **Export context lines** — defaults to `3` (`diff -U3` style); accepts non-negative whole numbers.
-- **Readable Unicode paths** — enabled by default. Keeps Ukrainian letters, emoji, and other Unicode characters readable in patch paths. Disable to use octal UTF-8 byte escapes. Paths containing spaces remain quoted; both modes work with Git and GNU patch.
+Patches preserve viewer order, CRLF, and missing final newlines. Creation reviews use `/dev/null` as the source; tracked deletions use it as the destination. A deletion exports the deletion even if a draft remains available for recovery. Rename sections use the **current path** with uppercase warning comments: the patch does not rename files. Pure renames export metadata only. Empty-file creation/deletion uses Git metadata; use Git for those cases.
 
-**Open after export** is enabled initially. Markdown opens in a new Obsidian tab, `.txt` opens in a new read-only Drift text tab, and other extensions open through the system's associated application. If opening fails, the saved export remains in the vault.
-
-The patch starts with metadata and a file list, followed by standard unified hunks using `a/` and `b/` paths relative to the vault root. It preserves CRLF and missing final newlines. It describes the pending text comparisons tracked by Drift, not a complete vault backup or a scan for added/deleted files.
-
-Both the header's file list and the patch sections follow the viewer order captured when the export dialog opens. Files whose Result equals Original are omitted without changing the order of the remaining files.
-
-Apply it from the root of a vault containing the **Original** versions (the current externally modified files may already contain some or all of the changes):
+From a vault containing the Original versions:
 
 ```sh
-git apply --check drift-2026-09-28_14-05.diff.txt
-git apply drift-2026-09-28_14-05.diff.txt
-# Alternatively:
-patch -p1 < drift-2026-09-28_14-05.diff.txt
+git apply --check drift-2026-10-02_14-05.diff.txt
+git apply drift-2026-10-02_14-05.diff.txt
+# For ordinary text hunks, GNU patch is also supported:
+patch -p1 < drift-2026-10-02_14-05.diff.txt
 ```
 
-For zero-context exports, add `--unidiff-zero` to both Git commands.
+For zero-context exports, add `--unidiff-zero` to Git commands. Exports cover pending reviews, not every file in the vault or a complete backup.
 
-To test in Obsidian, edit a Result draft, collapse another changed file, and export. Check that both appear in the patch. Export again, remove the suggested suffix, verify the red overwrite warning, and save. Check **Open after export** with `.txt`, `.md`, and an extension associated with an external application.
+## Installation and development
 
-## Commands
+Install Drift from the [Obsidian community plugin directory](https://community.obsidian.md/plugins/drift), or download `main.js`, `manifest.json`, and `styles.css` from a release into `<Vault>/.obsidian/plugins/drift/` and enable it in **Settings → Community plugins**. This experimental branch must be built locally to use its unreleased features.
 
-| Command | Description |
-|---------|-------------|
-| **Open diff viewer** | Open or focus the diff viewer tab |
-| **Toggle external change detection** | Enable/disable external change detection |
+```sh
+npm ci
+npm run build
+npm run lint
+npm run test:review
+npm run test:diff
+npm run test:export
+npm run bench:rename
+```
+
+Copy the three plugin files into a disposable test vault and reload Drift. `npm run dev` watches sources, but copying and reloading are still required. Generated `main.js` and dependencies are excluded from Git. Export tests require Git and GNU patch.
+
+End-to-end tests launch a separate Obsidian profile; see [test environment notes](e2e/LEARNINGS.md). Manual Dropbox testing requires another device and is listed separately in the checklist.
+
+Commands retain stable IDs: **Open diff viewer** and **Toggle external change detection**.

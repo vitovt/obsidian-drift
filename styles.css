@@ -331,3 +331,93 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	overflow-wrap: anywhere;
 	text-align: start;
 }
+
+.diff-view-renamed {
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+}
+
+.diff-view-rename-suggestions {
+	padding: 8px 12px;
+	color: var(--text-muted);
+	overflow-wrap: anywhere;
+	border-inline-start: 2px solid var(--interactive-accent);
+}
+
+.diff-view-rename-suggestions button {
+	margin: 6px 6px 0 0;
+}
+
+.diff-view-section:has(.diff-view-section-header:not(.is-expanded)) .diff-view-rename-suggestions {
+	display: none;
+}
+
+.diff-rename-modal {
+	width: min(90vw, 1200px);
+}
+
+.diff-rename-preview .cm-scroller {
+	max-height: 45vh;
+	overflow: auto;
+}
+
+.diff-rename-status {
+	margin-top: 8px;
+	margin-bottom: 8px;
+}
+
+.diff-rename-status.is-error {
+	color: var(--text-error);
+}
+
+.diff-view-bulk-counts {
+	grid-column: 1 / -1;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.diff-view-toolbar-actions,
+.diff-view-actions {
+	flex-wrap: wrap;
+}
+
+.diff-view-rename-suggestions:empty {
+	display: none;
+}
+
+.diff-rename-modal .modal-content {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.diff-rename-preview {
+	flex: 1 1 auto;
+	min-height: 80px;
+	overflow: auto;
+}
+
+.diff-rename-footer {
+	flex-shrink: 0;
+	position: sticky;
+	bottom: 0;
+	background: var(--background-primary);
+}
+
+
+/* Separate settings groups without changing Obsidian's native control layout. */
+.drift-settings-section + .drift-settings-section {
+	margin-top: 24px;
+	padding-top: 16px;
+	border-top: 1px solid var(--background-modifier-border);
+}
+
+.drift-settings-section > .setting-item:first-child {
+	border-top: none;
+}
+
+.drift-settings-editor-events {
+	margin-inline-start: 16px;
+	padding-inline-start: 12px;
+	border-inline-start: 2px solid var(--background-modifier-border);
+}
