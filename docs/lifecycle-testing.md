@@ -20,12 +20,16 @@ Use a disposable vault. Run `npm run build`, copy `main.js`, `manifest.json`, an
 
 ## Origins
 
-1. With **Review editor changes** off, type and wait for autosave: no new review.
+1. With **Review other editor changes** off, type and wait for autosave: no new review.
 2. With **Review file API operations** on, write via `vault.modify`, frontmatter APIs, or a connected AI tool: expect review for both open and closed notes.
 3. Turn API review off and repeat: no new review. If an external review already existed, the API write must not silently dismiss it.
 4. Enable typing review: typing should be included without repeated edit-warning prompts for an untouched typing review.
 5. Recognized moves must keep existing reviews usable even with detection or lifecycle creation disabled. API-origin classification includes in-app file operations; test this separately from typing.
-6. With typing review off and API review on, paste a URL and let an editor-based link-title plugin format it. Wait for autosaves: no reverse Markdown-link → URL review should appear. Then make a genuine Vault API edit and verify that it is still reviewed. A pre-existing incorrect, unedited review can be dismissed with **Keep current**, which retains the current disk contents.
+6. With other editor changes off and **Review Editor API changes (experimental)** on, enter a URL, then replace it through `editor.replaceRange`: expect URL → Markdown link. Wait for autosaves and verify the direction stays correct. Test with Auto Link Title too: its initial API insertion/placeholder may also become part of the review.
+7. Repeat with the Editor API option off: no new review from supported editor methods. File API review remains independent. Confirm ordinary keyboard typing stays excluded when other editor changes are off.
+8. Exercise nested `replaceSelection`/`replaceRange`, `setValue`, and `transaction`; test several notes and split editors, switching files, closing/reopening leaves, and reloading Drift. Direct CodeMirror edits follow the other-editor setting.
+9. Make a Result draft, then let another editor API replacement occur: retain the draft and mark a conflict. Check Undo/Redo and ordinary paste with the real plugins you use; Obsidian's own Editor API calls may also be included.
+10. A pre-existing incorrect, unedited reverse review can be dismissed with **Keep current**, which retains the current disk contents.
 
 ## Renames and decisions
 

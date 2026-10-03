@@ -11,8 +11,9 @@ Review changes to Markdown notes in one place inside Obsidian. Drift compares th
 | Enable change detection | On | Review changes to known Markdown files. |
 | Review newly created files | **Off** | New files establish a baseline and remain eligible for rename matching. Later edits are reviewed. Enable to review the initial creation too. |
 | Ignore changes to empty files | Off | When enabled, the first content written to a zero-character file becomes its baseline. Whitespace is not empty. Existing reviews are preserved. This is independent of reviewing new files. |
-| Review editor changes | Off | Include typing, pasting, and plugin changes made through the editor, such as link-title formatting. These sources cannot reliably be separated. |
-| Review file API operations | On | Include operations through Obsidian file APIs, from plugins, integrations, or Obsidian itself. Plugins using the editor instead follow **Review editor changes**. |
+| Review other editor changes | Off | Include typing, pasting, and changes not recognized as Editor API calls, including plugins that modify CodeMirror directly. |
+| Review Editor API changes (experimental) | On | Review programmatic calls through supported Editor API methods, including link-title formatting. This identifies a write path, not the author. |
+| Review file API operations | On | Include operations through Obsidian file APIs, from plugins, integrations, or Obsidian itself. Supported Editor API calls follow **Review Editor API changes**; other editor changes follow **Review other editor changes**. |
 | Review changes made while closed | On | Store local Markdown content checkpoints and compare them during the next startup. |
 | Track renames and deletions (experimental) | Off | Review missing files and suggest possible renames. |
 
@@ -22,7 +23,11 @@ For example, with the defaults, copying `notes.md` into the vault creates **no r
 
 Origin detection uses editor transactions and file APIs. It cannot reliably identify every tool or distinguish an Obsidian file operation from a plugin using the same API. Unknown filesystem writes are treated as external. Disabling API review does not dismiss an existing external review: a later API write can instead mark it as needing a fresh comparison. An AI tool writing through an Obsidian API is covered by API review; one writing directly to disk is covered by external detection.
 
-Plugins that change text through the editor, such as automatic link-title formatting, currently follow **Review editor changes**. Drift recognizes recent editor versions when delayed autosaves arrive, so an earlier URL save does not become a reverse review after the editor has already formatted the link. This matching is bounded to 64 versions and 8 Mi characters across files, with a 10-second lifetime; it does not identify the plugin responsible.
+On the `experimental/programmatic-editor-reviews` branch, **Review Editor API changes (experimental)** wraps `replaceRange`, `replaceSelection`, `setValue`, and `transaction` on open Markdown editors. For example, an existing plain URL followed by an API replacement produces Original = URL and Result = Markdown link. Successive plugin replacements continue the same review and preserve edited Result drafts. The option defaults on in this branch; other editor changes remain off. Existing settings are retained.
+
+This is partial classification, not plugin attribution. Obsidian itself can call these APIs, including in response to user actions. Plugins that dispatch directly to CodeMirror, retained method references that bypass the wrappers, and calls before an editor is attached may not be recognized. A paste plugin can insert a placeholder through the API before fetching its title; that initial insertion can also be reviewed. There is no promise that every paste plugin produces a plain-URL baseline. Disabling API review does not discard an existing review.
+
+Wrappers mark only their synchronous call scope, support nested calls, and are restored on editor removal or plugin unload without replacing another plugin's newer wrapper. No stack inspection, vault scan, or new filesystem watcher is added. Drift also recognizes recent editor versions when delayed autosaves arrive, so an earlier URL save does not become a reverse review. Autosave matching is bounded to 64 versions and 8 Mi characters across files, with a 10-second lifetime.
 
 The first run establishes the checkpoint; it cannot recover changes made before installation. With checkpoints enabled, subsequent startup compares the current vault against the last saved observations, including changes delivered by Dropbox while Obsidian was closed. It reuses the startup Markdown scan, with four concurrent reads. Read failures keep the previous checkpoint and saved drafts and show a retry notice. There is no additional filesystem watcher or continuous polling.
 
