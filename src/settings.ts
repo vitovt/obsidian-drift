@@ -106,7 +106,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 			if (key === "trackApiChanges") {
-				eventsBlock = sources.createDiv({cls: "drift-settings-api-operations"});
+				eventsBlock = sources.createDiv({cls: "drift-settings-children drift-settings-api-operations"});
 				eventsBlock.style.display = this.plugin.settings.trackApiChanges ? "" : "none";
 				for (const [child, title, desc] of [
 					["trackApiContentChanges", "Review file content changes", "Review text written through file APIs, for example by formatters, metadata tools, or integrations, including writes initiated through Obsidian's interface. Editor typing and Editor API calls follow their separate settings. Initial content in newly created files also requires Review newly created files."],
@@ -121,7 +121,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				}
 			}
 			if (key === "trackProgrammaticChanges") {
-				eventsBlock = sources.createDiv({cls: "drift-settings-editor-events"});
+				eventsBlock = sources.createDiv({cls: "drift-settings-children drift-settings-editor-events"});
 				eventsBlock.style.display = this.plugin.settings.trackProgrammaticChanges ? "" : "none";
 				let resetText = () => {};
 				new Setting(eventsBlock)
@@ -194,6 +194,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		let highlightingOptions: HTMLElement;
 		new Setting(display)
 			.setName("Word-level highlighting")
 			.setDesc("Highlight changed words within line-based change blocks; unchanged regions collapse when toggled.")
@@ -201,21 +202,21 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.wordLevelHighlighting)
 				.onChange(async (value) => {
 					this.plugin.settings.wordLevelHighlighting = value;
+					highlightingOptions.style.display = value ? "" : "none";
 					await this.plugin.saveSettings();
-					this.display();
 				}));
 
-		if (this.plugin.settings.wordLevelHighlighting) {
-			new Setting(display)
-				.setName("High-contrast word highlighting")
-				.setDesc("Add a red or green background to changed text when word-level highlighting is enabled")
-				.addToggle(toggle => toggle
-					.setValue(this.plugin.settings.contrastChangedText)
-					.onChange(async (value) => {
-						this.plugin.settings.contrastChangedText = value;
-						await this.plugin.saveSettings();
-					}));
-		}
+		highlightingOptions = display.createDiv({cls: "drift-settings-children"});
+		highlightingOptions.style.display = this.plugin.settings.wordLevelHighlighting ? "" : "none";
+		new Setting(highlightingOptions)
+			.setName("High-contrast word highlighting")
+			.setDesc("Add a red or green background to changed text when word-level highlighting is enabled")
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.contrastChangedText)
+				.onChange(async (value) => {
+					this.plugin.settings.contrastChangedText = value;
+					await this.plugin.saveSettings();
+				}));
 		addExportSettings(section("Diff export"), this.plugin);
 		const diagnostics = section("Diagnostics");
 		new Setting(diagnostics)
@@ -230,7 +231,8 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 				if (!value) await this.plugin.debugLog.stop();
 				await this.plugin.saveSettings();
 			}));
-		new Setting(diagnostics)
+		const debugOptions = diagnostics.createDiv({cls: "drift-settings-children"});
+		new Setting(debugOptions)
 			.setName("Debug log location")
 			.setDesc("Copy the full path to the current session's log, including after debug logging is turned off.")
 			.addButton(button => button.setButtonText("Copy log path").onClick(async () => {

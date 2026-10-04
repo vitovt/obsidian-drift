@@ -12,6 +12,10 @@ Possible renames show **From → To** paths. **Confirm rename** associates the d
 
 **Undo association** reopens the rename decision; it does not move files. New confirmations save the pre-association review snapshots, so undo remains available after restart and later content updates. Edited drafts are preserved; editor undo/redo history remains session-only. Older renames without saved association history show a disabled Undo button with an explanation. Undo is blocked if the associated file is missing, the paths have changed, or another file/review occupies the source path. Deletion actions remain disabled until you confirm a rename again or choose **Treat as separate files**, including after a restart. Once treated separately, **Restore file** restores the old path and **Keep deletion** leaves that path deleted; neither changes the other file.
 
+## Settings layout
+
+Dependent controls share an indented block with a vertical divider. **High-contrast word highlighting** appears below **Word-level highlighting** only while it is enabled; hiding it preserves its value. Editor API event filters and File API child switches use the same layout. **Debug log location** is also indented beneath Debug logging, but remains available after logging is disabled so the completed log path can still be copied.
+
 ## What gets reviewed
 
 **Review file API operations** is a master switch with three indented child settings. Turning it off hides the children and preserves their values:
