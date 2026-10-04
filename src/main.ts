@@ -27,6 +27,7 @@ interface PersistedData {
 
 /** How long an internal-write mark stays valid before the CM6 "set" it announces must have arrived. */
 const INTERNAL_WRITE_MARK_TTL_MS = 2000;
+const PERSIST_IDLE_MS = 5000;
 
 /** Prefer explicit typing/history annotations over the route through Editor API. */
 function isManualEditorTransaction(tr: Transaction, events: readonly string[]): boolean {
@@ -69,7 +70,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private startupEvents: (() => void)[] = [];
 	private saveQueue: Promise<void> = Promise.resolve();
 	private restoredDiffs: PersistedDiffEntry[] = [];
-	private saveTimer: ReturnType<typeof activeWindow.setTimeout> | null = null;
+	private saveTimer: number | null = null;
 	private applying = new Set<string>();
 	private lifecycle: FileLifecycle;
 	private renameMatcher: RenameMatcher;
@@ -184,10 +185,6 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.disposed = true;
 		this.typingContents.clear();
 		this.creationQueue.dispose();
-		if (this.saveTimer) {
-			activeWindow.clearTimeout(this.saveTimer);
-			this.saveTimer = null;
-		}
 		void this.saveState();
 	}
 
@@ -261,13 +258,18 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	private saveState(): Promise<void> {
-		const data: PersistedData = {
-			settings: {...this.settings},
-			pendingDiffs: this.baselineReady ? this.serializePendingDiffs() : this.restoredDiffs,
-			baselines: this.settings.reviewWhileClosed ? this.baselineReady ? checkpoint(this.baselines, this.pendingDiffs) : this.savedBaselines : undefined,
-		};
-		// Serialize writes so an earlier, slower save cannot replace newer state.
-		this.saveQueue = this.saveQueue.then(() => this.saveData(data)).catch(error => {
+		if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+		this.saveTimer = null;
+		// Serialize writes and build snapshots only when their write can start,
+		// outside editor transactions.
+		this.saveQueue = this.saveQueue.then(() => {
+			const data: PersistedData = {
+				settings: {...this.settings},
+				pendingDiffs: this.baselineReady ? this.serializePendingDiffs() : this.restoredDiffs,
+				baselines: this.settings.reviewWhileClosed ? this.baselineReady ? checkpoint(this.baselines, this.pendingDiffs) : this.savedBaselines : undefined,
+			};
+			return this.saveData(data);
+		}).catch(error => {
 			console.error("Drift: could not save review state", error);
 			new Notice("Drift could not save reviews. Keep this session open and check storage before restarting.", 10000);
 		});
@@ -308,13 +310,15 @@ export default class ExternalDiffPlugin extends Plugin {
 		}));
 	}
 
-	/** Schedule a debounced save of state to disk. */
+	/** Keep state in memory until changes stop; no periodic writes during typing. */
 	private persistState(): void {
-		if (this.saveTimer || this.initializing) return;
-		this.saveTimer = activeWindow.setTimeout(() => {
+		if (this.disposed || this.initializing) return;
+		if (this.saveTimer !== null) window.clearTimeout(this.saveTimer);
+		// Use the same timer owner even when editing in a pop-out window.
+		this.saveTimer = window.setTimeout(() => {
 			this.saveTimer = null;
 			void this.saveState();
-		}, 500);
+		}, PERSIST_IDLE_MS);
 	}
 
 	/** Restore pending diffs from persisted data, discarding stale entries. */
@@ -387,6 +391,8 @@ export default class ExternalDiffPlugin extends Plugin {
 
 			EditorView.updateListener.of((update: ViewUpdate) => {
 				if (!update.docChanged) return;
+				// Ignored edits also postpone any pending full-state write.
+				if (this.saveTimer !== null) this.persistState();
 				this.debugLog.write("editor.update", () => {
 					const path = this.getPathForEditorView(update.view);
 					return {path, programmatic: !!path && this.programmaticEdits.isActive(path),
@@ -445,7 +451,7 @@ export default class ExternalDiffPlugin extends Plugin {
 					}
 					this.typingContents.set(path, update.state.doc.toString());
 					this.baselines.set(path, update.state.doc.toString());
-					this.persistState();
+					if (this.settings.reviewWhileClosed) this.persistState();
 				}
 			}),
 		];
@@ -562,7 +568,6 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.debugLog.write("vault.ignored", () => ({path, reason: "recognized editor autosave", length: current.length}));
 				// The editor already established its baseline. An older autosave
 				// must neither rewind it nor create a reverse review.
-				this.persistState();
 				return;
 			}
 			this.typingContents.delete(file.path);

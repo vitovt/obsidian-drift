@@ -1101,3 +1101,113 @@ test('programmatic conversion retains older autosave versions and its forward re
   }
   plugin.programmaticEdits.dispose();
 });
+
+function persistenceFixture(t) {
+  const previousWindow = globalThis.window;
+  let now = 0;
+  let nextId = 0;
+  const timers = new Map();
+  globalThis.window = {
+    setTimeout(callback, delay) {
+      const id = ++nextId;
+      timers.set(id, {callback, due: now + delay});
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  t.after(() => {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  });
+  const plugin = new Plugin();
+  plugin.settings = {reviewWhileClosed: true};
+  plugin.baselineReady = true;
+  const writes = [];
+  plugin.saveData = async data => { writes.push(data); };
+  return {plugin, writes, async advance(ms) {
+    now += ms;
+    for (const [id, timer] of timers) {
+      if (timer.due <= now) { timers.delete(id); timer.callback(); }
+    }
+    await plugin.saveQueue;
+  }};
+}
+
+test('continuous edits defer full-state persistence until five seconds idle', async t => {
+  const {plugin, writes, advance} = persistenceFixture(t);
+  let snapshots = 0;
+  const serialize = plugin.serializePendingDiffs.bind(plugin);
+  plugin.serializePendingDiffs = () => { snapshots++; return serialize(); };
+  for (let i = 0; i < 120; i++) {
+    plugin.baselines.set('note.md', `edit ${i}`);
+    plugin.persistState();
+    await advance(250);
+  }
+  assert.equal(writes.length, 0);
+  assert.equal(snapshots, 0);
+  await advance(4749);
+  assert.equal(writes.length, 0);
+  await advance(1);
+  assert.equal(writes.length, 1);
+  assert.equal(snapshots, 1);
+  assert.deepEqual(writes[0].baselines, [['note.md', 'edit 119']]);
+  await advance(10000);
+  assert.equal(writes.length, 1);
+});
+
+test('unload flushes pending drafts and cancels the idle timer', async t => {
+  const {plugin, writes, advance} = persistenceFixture(t);
+  plugin.pendingDiffs.set('note.md', {oldContent: 'old', newContent: 'new', draftContent: 'draft'});
+  plugin.persistState();
+  plugin.onunload();
+  await plugin.saveQueue;
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].pendingDiffs[0].draftContent, 'draft');
+  plugin.persistState();
+  await advance(10000);
+  assert.equal(writes.length, 1);
+});
+
+test('explicit saves cancel deferred saves and wait for prior writes', async t => {
+  const {plugin, writes, advance} = persistenceFixture(t);
+  let release;
+  plugin.saveData = data => {
+    writes.push(data);
+    return new Promise(resolve => { release = resolve; });
+  };
+  const first = plugin.saveState();
+  await Promise.resolve();
+  plugin.persistState();
+  const second = plugin.saveState();
+  plugin.baselines.set('note.md', 'latest');
+  assert.equal(writes.length, 1);
+  release();
+  await first;
+  await Promise.resolve();
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes[1].baselines, [['note.md', 'latest']]);
+  release();
+  await second;
+  await advance(10000);
+  assert.equal(writes.length, 2);
+});
+
+test('editor updates defer existing saves without persisting checkpoint-only changes when disabled', async t => {
+  const {plugin, writes, advance} = persistenceFixture(t);
+  plugin.settings = {enabled: true, reviewWhileClosed: false};
+  plugin.getPathForEditorView = () => 'note.md';
+  const onUpdate = plugin.createDetectionExtension()[1].value;
+  const update = {docChanged: true, transactions: [], state: {doc: {toString: () => 'typed'}}, view: {}};
+  onUpdate(update);
+  await advance(6000);
+  assert.equal(writes.length, 0);
+  assert.equal(plugin.baselines.get('note.md'), 'typed');
+  plugin.persistState(); // A pending review still needs saving.
+  await advance(4000);
+  onUpdate(update);
+  await advance(4000);
+  assert.equal(writes.length, 0);
+  await advance(1000);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].baselines, undefined);
+});
