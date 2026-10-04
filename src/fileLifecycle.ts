@@ -46,7 +46,7 @@ export class FileLifecycle {
 				baselines.delete(path);
 				continue;
 			}
-			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackApiChanges) && (previous || baseline !== undefined)) {
+			if (settings.enabled && (settings.trackFileDeletions || settings.trackFileRenames) && (!internal || settings.trackApiChanges && settings.trackApiDeletions) && (previous || baseline !== undefined)) {
 				const diff = previous ?? this.host.make(path, baseline!, baseline!);
 				diff.matchContent ??= previous?.newContent ?? baseline;
 				markDeleted(diff, previous ? !!previous.deletionOnly : true);
@@ -70,7 +70,7 @@ export class FileLifecycle {
 			baselines.set(destination(path), content);
 		}
 		if (reviews.size || settings.enabled && settings.trackFileRenames) {
-			if (settings.enabled && (!internal || settings.trackApiChanges) && settings.trackFileRenames && file instanceof TFile && file.extension === "md" && !reviews.has(oldPath) && baseline !== undefined) {
+			if (settings.enabled && (!internal || settings.trackApiChanges && settings.trackApiRenames) && settings.trackFileRenames && file instanceof TFile && file.extension === "md" && !reviews.has(oldPath) && baseline !== undefined) {
 				reviews.set(oldPath, this.host.make(oldPath, baseline, baseline));
 			}
 			// Rebuild keys in place order, keeping review objects and editor history.
@@ -86,7 +86,7 @@ export class FileLifecycle {
 					reviews.set(path, diff);
 					continue;
 				}
-				diff.originalPath ??= path;
+				if (settings.enabled && settings.trackFileRenames && (!internal || settings.trackApiChanges && settings.trackApiRenames)) diff.originalPath ??= path;
 				diff.path = next;
 				diff.missing = false;
 				if (diff.originalPath === next) {

@@ -55,6 +55,9 @@ export default class ExternalDiffPlugin extends Plugin {
 		otherEditor: this.settings.trackInAppChanges,
 		editorApi: this.settings.trackProgrammaticChanges,
 		fileApi: this.settings.trackApiChanges,
+		fileApiContent: this.settings.trackApiContentChanges,
+		fileApiRenames: this.settings.trackApiRenames,
+		fileApiDeletions: this.settings.trackApiDeletions,
 		manualEvents: this.manualEvents,
 	}), message => { new Notice(message, 12000); });
 	private programmaticEdits = new ProgrammaticEdits((event, details) => this.debugLog.write(event, details), () => !!this.settings?.debug);
@@ -488,7 +491,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			// Ignore a read that finished after another replacement, rename, or review.
 			if (this.disposed || file.path !== path || this.app.vault.getAbstractFileByPath(path) !== file ||
 				this.pendingDiffs.get(path) !== previous || this.applying.has(path)) return;
-			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && (!internal || this.settings.trackApiChanges)) {
+			if (!previous && baseline !== undefined && baseline !== current && this.settings.enabled && (!internal || this.settings.trackApiChanges && this.settings.trackApiContentChanges)) {
 				this.handleExternalChange(path, baseline, current);
 			} else if (previous) {
 				markPresent(previous);
@@ -508,14 +511,14 @@ export default class ExternalDiffPlugin extends Plugin {
 				this.persistState();
 				this.getExistingDiffView()?.syncFiles(this.pendingDiffs);
 			}
-			if (!previous && baseline === undefined && trackCreation && this.settings.reviewNewFiles && this.settings.enabled && (!internal || this.settings.trackApiChanges && current !== "")) {
+			if (!previous && baseline === undefined && trackCreation && this.settings.reviewNewFiles && this.settings.enabled && (!internal || this.settings.trackApiChanges && this.settings.trackApiContentChanges && current !== "")) {
 				this.handleExternalChange(path, "", current, false, true);
 			}
 			const pending = this.pendingDiffs.get(path);
 			if (pending) pending.matchContent = current;
 			this.baselines.set(path, current);
 			this.persistState();
-			if (trackCreation && (!internal || this.settings.trackApiChanges)) this.renameMatcher?.observe(path, current, true);
+			if (trackCreation && (!internal || this.settings.trackApiChanges && this.settings.trackApiRenames)) this.renameMatcher?.observe(path, current, true);
 		} catch (error) {
 			console.error("Drift: could not read created file", error);
 		}
@@ -563,7 +566,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				return;
 			}
 			this.typingContents.delete(file.path);
-			if (!isSelfWrite && this.settings.trackApiChanges) {
+			if (!isSelfWrite && this.settings.trackApiChanges && this.settings.trackApiContentChanges) {
 				this.debugLog.write("vault.classified", () => ({path, source: "file-api", length: current.length}));
 				const before = this.baselines.get(file.path);
 				if (before !== undefined && (before !== current || this.pendingDiffs.has(file.path))) this.handleExternalChange(file.path, before, current);

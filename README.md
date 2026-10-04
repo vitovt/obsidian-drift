@@ -14,6 +14,15 @@ Possible renames show **From → To** paths. **Confirm rename** associates the d
 
 ## What gets reviewed
 
+**Review file API operations** is a master switch with three indented child settings. Turning it off hides the children and preserves their values:
+
+- **Review file content changes** defaults on: text written through file APIs by plugins, integrations, or Obsidian. Initial file creation also follows **Review newly created files**.
+- **Review file renames and moves** defaults off: includes manual renames and moves in Obsidian as well as plugin operations.
+- **Review file deletions** defaults off: includes manual deletions in Obsidian as well as plugin operations.
+
+The rename and deletion children also require **Track renames and deletions**. External filesystem operations continue to follow the existing external detection settings. Existing reviews follow ignored internal renames without adding a new original-path change. These defaults also apply when upgrading from settings that do not yet contain the child options; the saved master-switch value is retained. Editor API review remains independent.
+
+
 | Setting | Default | Behavior |
 | --- | --- | --- |
 | Enable change detection | On | Review changes to known Markdown files. |

@@ -457,7 +457,8 @@ body:has(.diff-view-filepath:hover) .tooltip {
 	border-top: none;
 }
 
-.drift-settings-editor-events {
+.drift-settings-editor-events,
+.drift-settings-api-operations {
 	margin-inline-start: 16px;
 	padding-inline-start: 12px;
 	border-inline-start: 2px solid var(--background-modifier-border);

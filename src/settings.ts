@@ -14,6 +14,9 @@ export interface ExternalDiffSettings {
 	enabled: boolean;
 	trackInAppChanges: boolean;
 	trackApiChanges: boolean;
+	trackApiContentChanges: boolean;
+	trackApiRenames: boolean;
+	trackApiDeletions: boolean;
 	trackProgrammaticChanges: boolean;
 	manualEditorEvents: string;
 	reviewWhileClosed: boolean;
@@ -35,6 +38,9 @@ export const DEFAULT_SETTINGS: ExternalDiffSettings = {
 	enabled: true,
 	trackInAppChanges: false,
 	trackApiChanges: true,
+	trackApiContentChanges: true,
+	trackApiRenames: false,
+	trackApiDeletions: false,
 	trackProgrammaticChanges: false,
 	manualEditorEvents: DEFAULT_MANUAL_EDITOR_EVENTS,
 	reviewWhileClosed: true,
@@ -89,7 +95,7 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 		for (const [key, name, description] of [
 			["trackInAppChanges", "Review other editor changes (probably not needed)", "Include typing, pasting, and editor changes not recognized as Editor API calls, including events listed as manual below. Plugins that modify CodeMirror directly also fall into this group. Leave off to ignore these changes."],
 			["trackProgrammaticChanges", "Review Editor API changes (experimental)", "Include programmatic edits through Editor API methods, such as automatic link-title formatting. Plugins and Obsidian itself can use these methods; this does not identify the author. Direct CodeMirror changes and calls before an editor is attached may not be recognized. Off by default."],
-			["trackApiChanges", "Review file API operations", "Include content changes and file operations made through Obsidian's file APIs by plugins, integrations, or Obsidian itself. Editor API calls follow Review Editor API changes instead; other editor edits follow Review other editor changes. New files, renames, and deletions also follow the options below. The source cannot always be identified."],
+			["trackApiChanges", "Review file API operations", "Enable the file API review types below. These APIs are used by plugins, integrations, and Obsidian itself; they do not identify who made the change. Turning this off preserves your child settings. Editor API changes have their own setting."],
 			["reviewWhileClosed", "Review changes made while closed", "Save local Markdown content checkpoints in plugin data and compare them on startup. The first run establishes a baseline. Changes found at startup cannot be attributed to an editor or plugin. Disable to remove checkpoints on the next save."],
 		] as const) {
 			let eventsBlock: HTMLElement | undefined;
@@ -99,6 +105,21 @@ export class ExternalDiffSettingTab extends PluginSettingTab {
 					if (eventsBlock) eventsBlock.style.display = value ? "" : "none";
 					await this.plugin.saveSettings();
 				}));
+			if (key === "trackApiChanges") {
+				eventsBlock = sources.createDiv({cls: "drift-settings-api-operations"});
+				eventsBlock.style.display = this.plugin.settings.trackApiChanges ? "" : "none";
+				for (const [child, title, desc] of [
+					["trackApiContentChanges", "Review file content changes", "Review text written through file APIs, for example by formatters, metadata tools, or integrations, including writes initiated through Obsidian's interface. Editor typing and Editor API calls follow their separate settings. Initial content in newly created files also requires Review newly created files."],
+					["trackApiRenames", "Review file renames and moves", "Review renames and folder moves through file APIs, whether triggered by plugins or manually through Obsidian's interface. Requires Track renames and deletions. Leave off to reorganize files in Obsidian without creating rename reviews; existing reviews still follow their files."],
+					["trackApiDeletions", "Review file deletions", "Review deletions through file APIs, including cleanup plugins and files or folders you delete manually in Obsidian's interface. Requires Track renames and deletions. Leave off to avoid new deletion reviews for these operations; existing drafts remain protected."],
+				] as const) {
+					new Setting(eventsBlock).setName(title).setDesc(desc)
+						.addToggle(toggle => toggle.setValue(this.plugin.settings[child]).onChange(async value => {
+							this.plugin.settings[child] = value;
+							await this.plugin.saveSettings();
+						}));
+				}
+			}
 			if (key === "trackProgrammaticChanges") {
 				eventsBlock = sources.createDiv({cls: "drift-settings-editor-events"});
 				eventsBlock.style.display = this.plugin.settings.trackProgrammaticChanges ? "" : "none";

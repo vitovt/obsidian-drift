@@ -89,3 +89,10 @@ Run `npm run test:review`, `npm run test:diff`, `npm run test:export`, `npm run 
 - Edit the associated file externally before undoing; the button should remain available. Repeat with an edited Result draft and confirm the draft is retained.
 - Create a file at the old path before undoing: the action must explain the conflict and leave both files and reviews intact.
 - Older saved renames without undo snapshots should show a disabled button with an explanation.
+
+## File API review types
+
+- Toggle the File API master switch: all three children hide/show together and retain their saved values after restart.
+- With content on and rename/deletion off, rename and delete fresh disposable files through Obsidian: no new lifecycle reviews should appear. Existing reviews should follow renamed files without adding a rename change.
+- Enable each lifecycle child separately with Track renames and deletions enabled: only the selected operation should create a review. Repeat with the master off: neither should create a review.
+- Verify a plugin file-content write follows the content child, while external edits and Editor API settings remain independent.
