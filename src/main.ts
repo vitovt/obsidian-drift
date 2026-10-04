@@ -18,12 +18,7 @@ import {FileLifecycle} from "./fileLifecycle";
 import {ProgrammaticEdits} from "./programmaticEdits";
 import {DebugLog} from "./debugLog";
 import {EditorSaves} from "./editorSaves";
-
-interface PersistedData {
-	settings?: Partial<ExternalDiffSettings>;
-	pendingDiffs?: PersistedDiffEntry[];
-	baselines?: [string, string][];
-}
+import {PersistedData, StatePersistence} from "./statePersistence";
 
 /** How long an internal-write mark stays valid before the CM6 "set" it announces must have arrived. */
 const INTERNAL_WRITE_MARK_TTL_MS = 2000;
@@ -69,6 +64,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private disposed = false;
 	private startupEvents: (() => void)[] = [];
 	private saveQueue: Promise<void> = Promise.resolve();
+	private persistence: StatePersistence;
 	private restoredDiffs: PersistedDiffEntry[] = [];
 	private saveTimer: number | null = null;
 	private applying = new Set<string>();
@@ -189,7 +185,10 @@ export default class ExternalDiffPlugin extends Plugin {
 	}
 
 	async loadSettings() {
-		const data: PersistedData = ((await this.loadData()) as PersistedData | null) ?? {};
+		this.persistence = new StatePersistence(this.app.vault.adapter,
+			`${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}/state`,
+			data => this.saveData(data), (event, details) => this.debugLog.write(event, details));
+		const data = await this.persistence.load(((await this.loadData()) as PersistedData | null) ?? {});
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, data.settings ?? {});
 		if (typeof this.settings.manualEditorEvents !== "string") this.settings.manualEditorEvents = DEFAULT_SETTINGS.manualEditorEvents;
 		this.manualEvents = manualEditorEvents(this.settings.manualEditorEvents);
@@ -246,6 +245,7 @@ export default class ExternalDiffPlugin extends Plugin {
 			}
 		}
 		this.baselineReady = true;
+		this.savedBaselines = undefined;
 		this.initializing = false;
 		for (const event of this.startupEvents.splice(0)) event();
 		if (this.pendingDiffs.size) {
@@ -268,7 +268,7 @@ export default class ExternalDiffPlugin extends Plugin {
 				pendingDiffs: this.baselineReady ? this.serializePendingDiffs() : this.restoredDiffs,
 				baselines: this.settings.reviewWhileClosed ? this.baselineReady ? checkpoint(this.baselines, this.pendingDiffs) : this.savedBaselines : undefined,
 			};
-			return this.saveData(data);
+			return this.persistence.save(data);
 		}).catch(error => {
 			console.error("Drift: could not save review state", error);
 			new Notice("Drift could not save reviews. Keep this session open and check storage before restarting.", 10000);

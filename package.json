@@ -11,6 +11,8 @@
 		"lint": "eslint .",
 		"bench:rename": "node e2e/test/bench/rename-matching.mjs",
 		"test:review": "node e2e/test/unit/review-draft.test.mjs",
+		"test:persistence": "node e2e/test/unit/state-persistence.test.mjs",
+		"bench:persistence": "node e2e/test/bench/state-persistence.mjs",
 		"test:diff": "node e2e/test/unit/word-diff.test.mjs",
 		"test:export": "node --test e2e/test/unit/export-diff.test.mjs e2e/test/unit/export-files.test.mjs"
 	},

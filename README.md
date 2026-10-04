@@ -56,7 +56,11 @@ Wrappers mark only their synchronous call scope, support nested calls, and are r
 
 The first run establishes the checkpoint; it cannot recover changes made before installation. With checkpoints enabled, subsequent startup compares the current vault against the last saved observations, including changes delivered by Dropbox while Obsidian was closed. It reuses the startup Markdown scan, with four concurrent reads. Read failures keep the previous checkpoint and saved drafts and show a retry notice. There is no additional filesystem watcher or continuous polling.
 
-Checkpoint text and review drafts are stored in the plugin's `data.json` inside the vault configuration folder. No telemetry or network requests are made by Drift. If your sync tool includes that folder, it can sync this data too. Disabling **Review changes made while closed** removes checkpoints on the next save; pending reviews and drafts remain. Routine saves wait for five seconds without changes, so continuous typing keeps checkpoints and drafts in memory. Settings changes save immediately, and plugin unload attempts a final save. Writes remain serialized and still include the full state; large vault checkpoints can therefore make an individual save expensive. An abrupt process or storage failure can lose changes since the last save, including a continuous typing session; unload saves are best-effort. Checkpoints are observations, not a version history or backup.
+Settings and a record index are stored in the plugin's `data.json`; checkpoint text and review drafts live in separate per-note JSON records in its `state/` directory inside the vault configuration folder. No telemetry or network requests are made by Drift. If your sync tool includes that folder, it can sync this data too. Sync or back up `data.json` and `state/` together. A missing or unreadable referenced record stops plugin loading rather than discarding saved state; finish synchronization or restore the missing record, then reload Drift. Older Drift versions cannot read the new record index.
+
+Disabling **Review changes made while closed** removes checkpoint references on the next save and cleans up their records; pending reviews and drafts remain.
+
+Routine saves wait for five seconds without changes, so continuous typing keeps checkpoints and drafts in memory. Settings changes save immediately, and plugin unload attempts a final save. Writes remain serialized. A changed note writes only its checkpoint and/or review record plus the index; unchanged records are reused, and a save with no changes does not write. Legacy `data.json` contents migrate automatically after their replacement records have been written successfully. Obsolete records are removed only after the new index saves. A single very large note or review can still make its own record expensive to save. An abrupt process or storage failure can lose changes since the last save, including a continuous typing session; unload saves are best-effort. Checkpoints are observations, not a version history or backup.
 
 ## Review actions
 
@@ -147,3 +151,5 @@ Copy the three plugin files into a disposable test vault and reload Drift. `npm 
 End-to-end tests launch a separate Obsidian profile; see [test environment notes](e2e/LEARNINGS.md). Manual Dropbox testing requires another device and is listed separately in the checklist.
 
 Commands retain stable IDs: **Open diff viewer** and **Toggle external change detection**.
+
+Persistence benchmark and profiling instructions: [Persistence performance](docs/persistence-performance.md).

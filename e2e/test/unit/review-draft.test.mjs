@@ -39,6 +39,7 @@ const {ProgrammaticEdits, EditorSaves, reviewDecision, reviewLabels, summarizeRe
 
 function setup(disk = 'external') {
   const plugin = new Plugin();
+  plugin.persistence = {save: data => plugin.saveData(data)};
   const file = new TFile('note.md');
   const io = {disk, writes: 0, fail: false};
   plugin.persistState = () => {};
@@ -1120,6 +1121,7 @@ function persistenceFixture(t) {
     else globalThis.window = previousWindow;
   });
   const plugin = new Plugin();
+  plugin.persistence = {save: data => plugin.saveData(data)};
   plugin.settings = {reviewWhileClosed: true};
   plugin.baselineReady = true;
   const writes = [];
@@ -1210,4 +1212,38 @@ test('editor updates defer existing saves without persisting checkpoint-only cha
   await advance(1000);
   assert.equal(writes.length, 1);
   assert.equal(writes[0].baselines, undefined);
+});
+
+test('plugin migrates inline data and reloads per-note state through its lifecycle', async () => {
+  const files = new Map();
+  let disk = {settings: {reviewWhileClosed: true}, baselines: [['note.md', 'before']],
+    pendingDiffs: [{path: 'note.md', oldContent: 'before', newContent: 'external', draftContent: 'draft'}]};
+  const create = () => {
+    const plugin = new Plugin();
+    plugin.manifest = {id: 'drift', dir: '.obsidian/plugins/drift'};
+    plugin.app = {vault: {adapter: {
+      exists: async () => true,
+      list: async () => ({files: [...files.keys()], folders: []}),
+      mkdir: async () => {},
+      read: async path => files.get(path),
+      write: async (path, text) => { files.set(path, text); },
+      remove: async path => { files.delete(path); },
+    }}};
+    plugin.loadData = async () => disk;
+    plugin.saveData = async data => { disk = JSON.parse(JSON.stringify(data)); };
+    return plugin;
+  };
+  const plugin = create();
+  await plugin.loadSettings();
+  assert.equal(plugin.savedBaselines[0][1], 'before');
+  // Saving before the startup scan must preserve restored data too.
+  await plugin.saveState();
+  assert.equal(disk.storage.version, 1);
+  assert.equal(disk.baselines, undefined);
+  assert.equal(disk.pendingDiffs, undefined);
+  assert.equal(files.size, 2);
+  const reloaded = create();
+  await reloaded.loadSettings();
+  assert.deepEqual(reloaded.savedBaselines, [['note.md', 'before']]);
+  assert.equal(reloaded.restoredDiffs[0].draftContent, 'draft');
 });
