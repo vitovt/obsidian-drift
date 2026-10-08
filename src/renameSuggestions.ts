@@ -19,7 +19,7 @@ export function renderRenameSuggestions(container: HTMLElement, diff: PendingDif
 		undo.title = reason;
 		container.title = reason;
 	}
-	if (diff.deleted && (tracking || diff.renameCandidates?.length || diff.renameDismissed || diff.renameDecisionPending)) {
+	if (diff.missing || diff.deleted) {
 		const candidates = diff.renameCandidates ?? [];
 		const best = candidates[0];
 		if (best) {
@@ -31,7 +31,7 @@ export function renderRenameSuggestions(container: HTMLElement, diff: PendingDif
 		} else if (tracking && !diff.renameDismissed) {
 			container.createDiv({text: "No automatic match yet. Large, empty, short, or older files may need manual selection."});
 		}
-		const choose = container.createEl("button", {text: best ? "Review match…" : "Select renamed file…"});
+		const choose = container.createEl("button", {text: best ? "Review match…" : "Link to existing file…"});
 		choose.addEventListener("click", () => diff.onFindRename?.());
 		if (best) {
 			const confirm = container.createEl("button", {text: "Confirm rename"});

@@ -25,7 +25,7 @@ export function setIcon() {}
 export function setTooltip() {}
 `;
 const result = await build({
-  stdin: {contents: `export {default as Plugin} from './src/main'; export {EditorSaves} from './src/editorSaves'; export {ProgrammaticEdits} from './src/programmaticEdits'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
+  stdin: {contents: `export {default as Plugin} from './src/main'; export {EditorSaves} from './src/editorSaves'; export {ProgrammaticEdits} from './src/programmaticEdits'; export * from './src/reviewDraft'; export {TFile} from 'obsidian'; export {FileLifecycle} from './src/fileLifecycle'; export {DiffView} from './src/DiffView'; export {InternalOperations} from './src/internalOperations'; export {RenameMatcher} from './src/renameMatcher'; export {RenameReviewModal} from './src/renameReviewModal'; export * from './src/renameSimilarity'; export * from './src/renameSearch'; export {renderRenameSuggestions} from './src/renameSuggestions'; export * from './src/checkpoint'; export * from './src/reviewActions'; export {selectExportEntries} from './src/export/reviewEntries';`, resolveDir: process.cwd()},
   bundle: true, write: false, platform: 'node', format: 'esm',
   plugins: [{name: 'mock-obsidian', setup(b) {
     b.onResolve({filter: /^obsidian$/}, () => ({path: 'obsidian', namespace: 'mock'}));
@@ -34,7 +34,7 @@ const result = await build({
     b.onLoad({filter: /.*/, namespace: 'mock'}, () => ({contents: mock, loader: 'js'}));
   }}],
 });
-const {ProgrammaticEdits, EditorSaves, reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
+const {searchRenameFiles, renderRenameSuggestions, ProgrammaticEdits, EditorSaves, reviewDecision, reviewLabels, summarizeReviews, checkpoint, readCheckpoint, Plugin, TFile, FileLifecycle, DiffView, InternalOperations, RenameMatcher, RenameReviewModal, fingerprint, similarity, selectExportEntries, restoreReview, ReviewConflictError, writeReviewedContent} = await import(
   'data:text/javascript;base64,' + Buffer.from(result.outputFiles[0].text).toString('base64'));
 
 function setup(disk = 'external') {
@@ -1246,4 +1246,101 @@ test('plugin migrates inline data and reloads per-note state through its lifecyc
   await reloaded.loadSettings();
   assert.deepEqual(reloaded.savedBaselines, [['note.md', 'before']]);
   assert.equal(reloaded.restoredDiffs[0].draftContent, 'draft');
+});
+
+test('missing legacy reviews survive restart and link with tracking disabled', async () => {
+  const {matcher, plugin, files, created, io} = matcherSetup();
+  try {
+    plugin.settings.trackFileRenames = false;
+    plugin.settings.trackFileDeletions = false;
+    const entries = ['old.md', 'vokoscreenNG-old.md'].map(path => ({path, oldContent: 'original ' + path, newContent: matchText}));
+    await plugin.restorePendingDiffs(entries);
+    assert.equal(plugin.pendingDiffs.size, 2);
+    const diff = plugin.pendingDiffs.get('old.md');
+    assert.equal(diff.missing, true); assert.equal(diff.deleted, undefined);
+    created('known.md'); plugin.baselines.set('known.md', matchText);
+    await matcher.confirm('old.md', diff, 'known.md', matchText);
+    assert.equal(diff.oldContent, 'original old.md');
+    assert.equal(plugin.pendingDiffs.get('known.md'), diff);
+    assert.equal(plugin.pendingDiffs.has('vokoscreenNG-old.md'), true);
+    const saved = plugin.serializePendingDiffs();
+    plugin.pendingDiffs.clear(); await plugin.restorePendingDiffs(saved);
+    const restored = plugin.pendingDiffs.get('known.md');
+    await matcher.undo(restored);
+    assert.equal(plugin.pendingDiffs.get('old.md').oldContent, 'original old.md');
+    assert.equal(plugin.pendingDiffs.get('old.md').missing, true);
+    assert.equal(files.has('known.md'), true); assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); }
+});
+
+test('manual missing-file linking preserves drafts and refuses every destination review', async () => {
+  const {matcher, plugin, created, deleted} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); diff.deleted = undefined; diff.missing = true;
+    diff.draftContent = 'precious draft';
+    created('new.md', 'remote revision');
+    const other = plugin.makeDiffCallbacks('new.md', 'independent original', 'remote revision');
+    plugin.pendingDiffs.set('new.md', other);
+    await assert.rejects(matcher.confirm('old.md', diff, 'new.md', 'remote revision'), /unfinished review/);
+    assert.equal(plugin.pendingDiffs.get('new.md'), other);
+    plugin.pendingDiffs.delete('new.md');
+    await matcher.confirm('old.md', diff, 'new.md', 'remote revision');
+    assert.equal(diff.oldContent, matchText); assert.equal(diff.draftContent, 'precious draft');
+    assert.equal(diff.conflicted, true);
+  } finally { matcher.dispose(); }
+});
+
+test('missing-file controls offer manual linking without rename tracking', () => {
+  const buttons = [];
+  const container = {empty() {}, removeAttribute() {}, createEl(tag, options) {
+    if (tag === 'button') buttons.push(options.text);
+    return {addEventListener() {}};
+  }};
+  renderRenameSuggestions(container, {missing: true}, false);
+  assert.deepEqual(buttons, ['Link to existing file…']);
+});
+
+test('explicit vault search finds known paths, ranks exact matches, and cancels', async () => {
+  const {matcher, plugin, created, files} = matcherSetup();
+  try {
+    plugin.settings.trackFileRenames = false;
+    created('known.md'); created('edited.md', matchText + '\nAn additional sentence.');
+    for (const file of files.values()) file.stat = {size: 100};
+    plugin.app.vault.getMarkdownFiles = () => [...files.values()];
+    plugin.baselines.set('known.md', matchText);
+    const results = await searchRenameFiles(plugin.app.vault, 'old.md', matchText, () => false, () => {});
+    assert.equal(results[0].path, 'known.md'); assert.equal(results[0].score, 1);
+    assert.equal(results[1].path, 'edited.md');
+    let cancelled = false;
+    const stopped = await searchRenameFiles(plugin.app.vault, 'old.md', matchText, () => cancelled, () => { cancelled = true; });
+    assert.deepEqual(stopped, []);
+  } finally { matcher.dispose(); }
+});
+
+test('recent creation metadata survives restart, updates contents and retains expiry', async () => {
+  const {matcher, plugin, created, contents, deleted} = matcherSetup();
+  try {
+    created('new.md', 'first contents');
+    const saved = matcher.serializeCandidates();
+    matcher.created.clear(); contents.set('new.md', matchText);
+    const diff = deleted('old.md'); diff.deleted = undefined; diff.missing = true;
+    await matcher.restore(saved); await matcher.refresh();
+    assert.equal(diff.renameCandidates[0].path, 'new.md');
+    assert.equal(matcher.serializeCandidates()[0][1], saved[0][1]);
+    matcher.created.clear(); diff.renameCandidates = [];
+    await matcher.restore([['new.md', Date.now() - 31 * 60 * 1000]]);
+    assert.deepEqual(matcher.serializeCandidates(), []);
+  } finally { matcher.dispose(); }
+});
+
+test('manual linking refuses a source that reappears during confirmation', async () => {
+  const {matcher, plugin, created, deleted, files} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); diff.deleted = undefined; diff.missing = true;
+    created('new.md');
+    plugin.app.vault.read = async () => { files.set('old.md', new TFile('old.md')); return matchText; };
+    await assert.rejects(matcher.confirm('old.md', diff, 'new.md', matchText), /changed/);
+    assert.equal(plugin.pendingDiffs.get('old.md'), diff);
+    assert.equal(plugin.pendingDiffs.has('new.md'), false);
+  } finally { matcher.dispose(); }
 });

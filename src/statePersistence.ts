@@ -3,6 +3,7 @@ import type {ExternalDiffSettings} from "./settings";
 import type {PersistedDiffEntry} from "./reviewDraft";
 
 export interface PersistedData {
+	recentRenameCandidates?: [string, number][];
 	settings?: Partial<ExternalDiffSettings>;
 	pendingDiffs?: PersistedDiffEntry[];
 	baselines?: [string, string][];
@@ -113,6 +114,7 @@ export class StatePersistence {
 		this.loaded = true;
 		return {
 			settings: data.settings,
+			...(data.recentRenameCandidates === undefined ? {} : {recentRenameCandidates: data.recentRenameCandidates}),
 			baselines: baselineRefs?.map(([path]) => [path, this.baselines.get(path)!.value as string]),
 			pendingDiffs: reviewRefs.map(([path]) => loadedReviews.get(path)!),
 		};
@@ -123,6 +125,7 @@ export class StatePersistence {
 		const started = performance.now();
 		let changedRecords = 0, recordCharacters = 0;
 		// Capture mutable metadata before the first await. Immutable strings are shared.
+		const recentRenameCandidates = copy(data.recentRenameCandidates) as PersistedData["recentRenameCandidates"];
 		const settings = copy(data.settings) as PersistedData["settings"];
 		const pendingDiffs = copy(data.pendingDiffs ?? []) as PersistedDiffEntry[];
 		const saveRecords = async (values: [string, unknown][], previous: Map<string, RecordEntry>) => {
@@ -146,7 +149,7 @@ export class StatePersistence {
 		};
 		const baselines = await saveRecords(data.baselines ?? [], this.baselines);
 		const reviews = await saveRecords(pendingDiffs.map(review => [review.path, review]), this.reviews);
-		const index: PersistedData = {settings, storage: {
+		const index: PersistedData = {settings, recentRenameCandidates, storage: {
 			version: 1,
 			baselines: data.baselines === undefined ? undefined : [...baselines].map(([path, entry]) => [path, entry.file]),
 			reviews: [...reviews].map(([path, entry]) => [path, entry.file]),

@@ -70,6 +70,7 @@ export default class ExternalDiffPlugin extends Plugin {
 	private applying = new Set<string>();
 	private lifecycle: FileLifecycle;
 	private renameMatcher: RenameMatcher;
+	private savedRenameCandidates: [string, number][] = [];
 	private baselineReady = false;
 	private internalOperations: InternalOperations;
 	private restoringPath: string | null = null;
@@ -198,6 +199,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		if (!validContextLines(this.settings.exportContextLines)) this.settings.exportContextLines = 3;
 		this.restoredDiffs = data.pendingDiffs ?? [];
 		this.savedBaselines = data.baselines;
+		this.savedRenameCandidates = data.recentRenameCandidates ?? [];
 	}
 
 	async saveSettings() {
@@ -252,7 +254,8 @@ export default class ExternalDiffPlugin extends Plugin {
 			const view = await this.ensureDiffTab();
 			view.syncFiles(this.pendingDiffs);
 		}
-		await this.renameMatcher?.restore();
+		await this.renameMatcher?.restore(this.savedRenameCandidates);
+		this.savedRenameCandidates = [];
 		if (unavailable.size) new Notice(`Drift could not read ${unavailable.size} files. Their previous checkpoints were kept; reload Drift to retry.`, 10000);
 		await this.saveState();
 	}
@@ -265,6 +268,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.saveQueue = this.saveQueue.then(() => {
 			const data: PersistedData = {
 				settings: {...this.settings},
+				recentRenameCandidates: this.baselineReady ? this.renameMatcher?.serializeCandidates() : this.savedRenameCandidates,
 				pendingDiffs: this.baselineReady ? this.serializePendingDiffs() : this.restoredDiffs,
 				baselines: this.settings.reviewWhileClosed ? this.baselineReady ? checkpoint(this.baselines, this.pendingDiffs) : this.savedBaselines : undefined,
 			};
@@ -326,12 +330,10 @@ export default class ExternalDiffPlugin extends Plugin {
 		for (const entry of entries) {
 			const file = this.app.vault.getAbstractFileByPath(entry.path);
 			if (!(file instanceof TFile)) {
-				if (entry.deleted || entry.originalPath || entry.draftContent !== undefined && entry.draftContent !== entry.newContent) {
-					const diff = Object.assign(this.makeDiffCallbacks(entry.path, entry.oldContent, entry.newContent), entry);
-					diff.draftContent = entry.draftContent ?? entry.newContent;
-					diff.missing = true;
-					this.pendingDiffs.set(entry.path, diff);
-				}
+				const diff = Object.assign(this.makeDiffCallbacks(entry.path, entry.oldContent, entry.newContent), entry);
+				diff.draftContent = entry.draftContent ?? entry.newContent;
+				diff.missing = true;
+				this.pendingDiffs.set(entry.path, diff);
 				continue;
 			}
 

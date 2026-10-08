@@ -58,7 +58,7 @@ export class RenameMatcher {
 	async refresh(): Promise<void> {
 		const generation = ++this.generation;
 		const {reviews, vault, settings} = this.host;
-		const pending = [...reviews].filter(([, diff]) => diff.deleted && !diff.renameDismissed);
+		const pending = [...reviews].filter(([, diff]) => (diff.missing || diff.deleted) && !diff.renameDismissed);
 		const start = this.nextSource % Math.max(1, pending.length);
 		const sources = [...pending.slice(start), ...pending.slice(0, start)];
 		for (const [path, candidate] of this.created) {
@@ -125,7 +125,7 @@ export class RenameMatcher {
 			const previous = diff.renameCandidates ?? [];
 			const suggested = [...(results.get(path) ?? []), ...previous.filter(candidate => !settings.enabled || !settings.trackFileRenames || !this.created.has(candidate.path))]
 				.sort((a, b) => b.score - a.score || a.path.localeCompare(b.path)).slice(0, 8);
-			diff.renameCandidates = diff.deleted && !diff.renameDismissed
+			diff.renameCandidates = (diff.missing || diff.deleted) && !diff.renameDismissed
 				? suggested.filter(candidate => candidate.path !== path && vault.getAbstractFileByPath(candidate.path) instanceof TFile) : [];
 			for (const candidate of diff.renameCandidates) {
 				const target = reviews.get(candidate.path);
@@ -164,11 +164,11 @@ export class RenameMatcher {
 		const target = vault.getAbstractFileByPath(targetPath);
 		if (!(target instanceof TFile) || target.extension !== "md" || targetPath === sourcePath) throw new Error("Select an existing Markdown file at a different path.");
 		const current = await vault.read(target);
-		if (this.disposed || reviews.get(sourcePath) !== diff || !diff.deleted || vault.getAbstractFileByPath(sourcePath) ||
+		if (this.disposed || reviews.get(sourcePath) !== diff || vault.getAbstractFileByPath(sourcePath) ||
 			target.path !== targetPath || vault.getAbstractFileByPath(targetPath) !== target || current !== expected ||
 			this.host.busy(sourcePath) || this.host.busy(targetPath)) throw new Error("The files changed. Open a new preview before confirming.");
 		const other = reviews.get(targetPath);
-		if (other && (other.draftContent !== other.newContent || other.conflicted || other.originalPath)) {
+		if (other) {
 			throw new Error("The selected file has its own unfinished review. Resolve it before associating these files.");
 		}
 		const before = snapshotReview(diff);
@@ -199,9 +199,8 @@ export class RenameMatcher {
 		this.created.delete(targetPath);
 		this.host.baselines.set(targetPath, current);
 		for (const entry of reviews.values()) entry.renameCandidates = entry.renameCandidates?.filter(candidate => candidate.path !== targetPath);
-		diff.renameUndo = {sourcePath, targetPath, source: before,
-			target: other ? snapshotReview(other) : undefined};
-		this.undoEditors.set(diff.renameUndo, {source: beforeEditor, target: other?.editorState});
+		diff.renameUndo = {sourcePath, targetPath, source: before};
+		this.undoEditors.set(diff.renameUndo, {source: beforeEditor, target: undefined});
 		this.host.changed();
 		this.schedule();
 	}
@@ -246,10 +245,29 @@ export class RenameMatcher {
 		this.schedule();
 	}
 
-	async restore(): Promise<void> {
+	serializeCandidates(): [string, number][] {
+		return [...this.created].filter(([, candidate]) => Date.now() - candidate.observed <= RETENTION_MS)
+			.map(([path, candidate]) => [path, candidate.observed]);
+	}
+
+	async restore(recent: [string, number][] = []): Promise<void> {
+		for (const [path, observed] of recent.slice(-MAX_CANDIDATES)) {
+			if (this.disposed) return;
+			if (!Number.isFinite(observed) || Date.now() - observed > RETENTION_MS || observed > Date.now()) continue;
+			const file = this.host.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile) || file.extension !== "md") continue;
+			try {
+				const text = await this.host.vault.read(file);
+				if (file.path !== path || this.host.vault.getAbstractFileByPath(path) !== file) continue;
+				this.observe(path, text, true);
+				const candidate = this.created.get(path);
+				if (candidate) candidate.observed = observed;
+			} catch { /* Retry through explicit vault search if sync interrupts the read. */ }
+		}
 		const paths = [...new Set([...this.host.reviews.values()].flatMap(diff => diff.renameCandidates?.map(candidate => candidate.path) ?? []))].slice(0, MAX_CANDIDATES);
 		for (const path of paths) {
 			if (this.disposed) return;
+			if (this.created.has(path)) continue;
 			const file = this.host.vault.getAbstractFileByPath(path);
 			if (!(file instanceof TFile)) continue;
 			try { this.observe(path, await this.host.vault.read(file), true); }

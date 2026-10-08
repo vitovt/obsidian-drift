@@ -159,3 +159,14 @@ test('metadata is snapshotted before asynchronous writes and later edits remain 
   await store.save(data);
   assert.deepEqual(await f.makeStore().load(f.disk), data);
 });
+
+test('recent rename candidates persist without checkpoint storage', async () => {
+  const f = fixture(), store = f.makeStore();
+  await store.load(f.disk);
+  const recentRenameCandidates = [['known.md', Date.now()]];
+  await store.save({pendingDiffs: [], recentRenameCandidates});
+  recentRenameCandidates[0][0] = 'mutated.md';
+  const restored = await f.makeStore().load(f.disk);
+  assert.equal(restored.recentRenameCandidates[0][0], 'known.md');
+  assert.equal(restored.baselines, undefined);
+});

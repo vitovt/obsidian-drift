@@ -4,6 +4,7 @@ import {EditorView, lineNumbers} from "@codemirror/view";
 import {EditorState} from "@codemirror/state";
 import type {PendingDiff} from "./DiffView";
 import type {RenameMatcher} from "./renameMatcher";
+import {searchRenameFiles} from "./renameSearch";
 import {renamePath, renamePaths} from "./renamePaths";
 
 class RenameFilePicker extends FuzzySuggestModal<TFile> {
@@ -25,12 +26,14 @@ export class RenameReviewModal extends Modal {
 	private selected?: {path: string; content: string};
 	private generation = 0;
 	private closed = false;
+	private searchGeneration = 0;
+	private searchResults!: HTMLElement;
 
 	constructor(app: App, private path: string, private diff: PendingDiff, private matcher: RenameMatcher) { super(app); }
 
 	onOpen(): void {
 		this.modalEl.addClass("diff-rename-modal");
-		this.titleEl.setText("Possible rename");
+		this.titleEl.setText("Link to existing file");
 		renamePath(this.contentEl.createDiv({cls: "diff-rename-paths"}), "From", this.path, true);
 		this.contentEl.createEl("p", {text: "Candidates are ordered by content similarity, not certainty. Preview a file before confirming."});
 		const candidates = this.diff.renameCandidates ?? [];
@@ -42,7 +45,10 @@ export class RenameReviewModal extends Modal {
 				.setDesc(candidate.score === 1 ? "Identical contents" : `${Math.floor(candidate.score * 100)}% content similarity`)
 				.addButton(button => button.setButtonText("Preview").onClick(() => { void this.select(candidate.path); }));
 		}
+		this.searchResults = this.contentEl.createDiv();
 		new Setting(this.contentEl)
+			.addButton(button => button.setButtonText("Find matches in vault").onClick(() => { void this.search(); }))
+			.addButton(button => button.setButtonText("Cancel search").onClick(() => { this.searchGeneration++; this.searchResults.setText("Search cancelled."); }))
 			.addButton(button => button.setButtonText("Select another file…").onClick(() => {
 				new RenameFilePicker(this.app, this.path, file => { void this.select(file.path); }).open();
 			}))
@@ -60,6 +66,27 @@ export class RenameReviewModal extends Modal {
 				this.confirmButton.disabled = true;
 			});
 		if (candidates.length === 1) void this.select(candidates[0]!.path);
+	}
+
+	private async search(): Promise<void> {
+		const generation = ++this.searchGeneration;
+		const cancelled = () => this.closed || generation !== this.searchGeneration;
+		this.searchResults.setText("Searching vault…");
+		try {
+			const matches = await searchRenameFiles(this.app.vault, this.path,
+				this.diff.matchContent ?? this.diff.newContent, cancelled,
+				(checked, total) => { if (!cancelled()) this.searchResults.setText(`Checking ${checked} of ${total} files…`); });
+			if (cancelled()) return;
+			this.searchResults.empty();
+			this.searchResults.createEl("p", {text: matches.length ? "Possible matches — preview before linking." : "No matches found. Large or unreadable files may be skipped; select a file manually."});
+			for (const match of matches) {
+				new Setting(this.searchResults).setName(match.path)
+					.setDesc(match.score === 1 ? "Identical contents" : `${Math.floor(match.score * 100)}% content similarity`)
+					.addButton(button => button.setButtonText("Preview").onClick(() => { void this.select(match.path); }));
+			}
+		} catch (error) {
+			if (!cancelled()) this.showError(error, "Could not search the vault.");
+		}
 	}
 
 	private async select(path: string): Promise<void> {
