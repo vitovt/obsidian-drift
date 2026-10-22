@@ -36,7 +36,7 @@ export function renderRenameSuggestions(container: HTMLElement, diff: PendingDif
 		if (best) {
 			const confirm = container.createEl("button", {text: "Confirm rename"});
 			confirm.disabled = !diff.onConfirmRename;
-			confirm.title = `Associate with ${best.path} without opening a preview. No files are moved or changed.`;
+			confirm.title = `Associate with ${best.path}. Opens a preview if the match needs checking. No files are moved or changed.`;
 			confirm.addEventListener("click", () => {
 				confirm.disabled = true;
 				void diff.onConfirmRename?.(best.path).catch(error => {

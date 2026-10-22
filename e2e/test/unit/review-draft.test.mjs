@@ -524,6 +524,96 @@ function matcherSetup() {
   return {...state, matcher, contents, deleted, created};
 }
 
+test('quick rename confirmation revalidates exact matches after cache expiration or eviction', async () => {
+  for (const reason of ['expired', 'evicted']) {
+    const {matcher, deleted, created, plugin, io} = matcherSetup();
+    try {
+      const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+      const editor = diff.editorState = EditorState.create({doc: 'edited draft', extensions: [history()]});
+      diff.draftContent = 'edited draft';
+      if (reason === 'expired') matcher.created.get('new.md').observed -= 31 * 60 * 1000;
+      else for (let i = 0; i < 128; i++) created(`unrelated-${i}.md`, 'unrelated');
+      await matcher.refresh();
+      assert.equal(matcher.created.has('new.md'), false);
+      assert.equal(diff.renameCandidates[0].path, 'new.md');
+      assert.equal(await matcher.confirmCandidate('old.md', diff, 'new.md'), true);
+      assert.equal(plugin.pendingDiffs.get('new.md'), diff);
+      assert.equal(diff.oldContent, matchText);
+      assert.equal(diff.draftContent, 'edited draft'); assert.equal(diff.editorState, editor);
+      assert.equal(io.writes, 0);
+      await matcher.undo(diff);
+      assert.equal(plugin.pendingDiffs.get('old.md'), diff);
+      assert.equal(diff.draftContent, 'edited draft');
+    } finally { matcher.dispose(); }
+  }
+});
+
+test('quick rename confirmation requests preview for changed or uncached approximate matches', async () => {
+  const {matcher, deleted, created, contents, plugin, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+    contents.set('new.md', matchText + '\nChanged after matching');
+    assert.equal(await matcher.confirmCandidate('old.md', diff, 'new.md'), false);
+    assert.equal(plugin.pendingDiffs.get('old.md'), diff);
+    matcher.created.clear();
+    diff.renameCandidates = [{path: 'new.md', score: .9}];
+    assert.equal(await matcher.confirmCandidate('old.md', diff, 'new.md'), false);
+    assert.equal(diff.path, 'old.md'); assert.equal(io.writes, 0);
+    const current = contents.get('new.md');
+    await matcher.confirm('old.md', diff, 'new.md', current);
+    assert.equal(plugin.pendingDiffs.get('new.md'), diff);
+  } finally { matcher.dispose(); }
+});
+
+test('quick rename confirmation still accepts a cached approximate match', async () => {
+  const {matcher, deleted, created, plugin} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md', matchText.replace('item_42', 'updated_item'));
+    await matcher.refresh();
+    assert.ok(diff.renameCandidates[0].score < 1);
+    assert.equal(await matcher.confirmCandidate('old.md', diff, 'new.md'), true);
+    assert.equal(plugin.pendingDiffs.get('new.md'), diff);
+  } finally { matcher.dispose(); }
+});
+
+test('quick rename fallback opens the chosen candidate even with multiple suggestions', async () => {
+  const {matcher, deleted, created, contents, plugin} = matcherSetup();
+  const originalOpen = RenameReviewModal.prototype.open;
+  let opened;
+  RenameReviewModal.prototype.open = function () { opened = this; };
+  try {
+    const diff = deleted('old.md'); created('a.md'); created('b.md'); await matcher.refresh();
+    contents.set('b.md', 'changed contents');
+    await diff.onConfirmRename('b.md');
+    assert.ok(opened instanceof RenameReviewModal);
+    assert.equal(opened.initialPath, 'b.md'); assert.equal(opened.diff, diff);
+    assert.equal(plugin.pendingDiffs.get('old.md'), diff);
+  } finally {
+    if (originalOpen) RenameReviewModal.prototype.open = originalOpen;
+    else delete RenameReviewModal.prototype.open;
+    matcher.dispose();
+  }
+});
+
+test('uncached exact confirmation retains path, review and busy guards', async () => {
+  for (const reason of ['returned', 'occupied', 'busy', 'moved', 'replaced']) {
+    const {matcher, deleted, created, plugin, files, io} = matcherSetup();
+    try {
+      const diff = deleted('old.md'); created('new.md'); await matcher.refresh(); matcher.created.clear();
+      if (reason === 'returned') files.set('old.md', new TFile('old.md'));
+      if (reason === 'occupied') plugin.pendingDiffs.set('new.md', plugin.makeDiffCallbacks('new.md', 'other original', matchText));
+      if (reason === 'busy') plugin.applying.add('new.md');
+      if (reason === 'replaced') plugin.pendingDiffs.set('old.md', {...diff});
+      if (reason === 'moved') plugin.app.vault.read = async file => {
+        files.delete('new.md'); file.path = 'elsewhere.md'; files.set(file.path, file); return matchText;
+      };
+      await assert.rejects(matcher.confirmCandidate('old.md', diff, 'new.md'), /changed|unfinished review/);
+      assert.equal(diff.path, 'old.md'); assert.equal(diff.oldContent, matchText);
+      assert.equal(io.writes, 0);
+    } finally { matcher.dispose(); }
+  }
+});
+
 test('fingerprints tolerate small edits and reflow, but reject empty and unrelated text', () => {
   const original = fingerprint(matchText);
   assert.equal(similarity(original, fingerprint(matchText)), 1);

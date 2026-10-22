@@ -29,7 +29,8 @@ export class RenameReviewModal extends Modal {
 	private searchGeneration = 0;
 	private searchResults!: HTMLElement;
 
-	constructor(app: App, private path: string, private diff: PendingDiff, private matcher: RenameMatcher) { super(app); }
+	constructor(app: App, private path: string, private diff: PendingDiff, private matcher: RenameMatcher,
+		private initialPath?: string) { super(app); }
 
 	onOpen(): void {
 		this.modalEl.addClass("diff-rename-modal");
@@ -65,7 +66,8 @@ export class RenameReviewModal extends Modal {
 				this.confirmButton = button.buttonEl;
 				this.confirmButton.disabled = true;
 			});
-		if (candidates.length === 1) void this.select(candidates[0]!.path);
+		const initialPath = this.initialPath ?? (candidates.length === 1 ? candidates[0]!.path : undefined);
+		if (initialPath) void this.select(initialPath);
 	}
 
 	private async search(): Promise<void> {

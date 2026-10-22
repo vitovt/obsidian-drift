@@ -9,6 +9,9 @@ const MAX_CANDIDATES = 128;
 const MAX_TEXT = 2 * 1024 * 1024;
 const RETENTION_MS = 30 * 60 * 1000;
 interface Candidate {text: string; print?: Fingerprint | null; observed: number}
+class RenameContentChangedError extends Error {
+	constructor() { super("The files changed. Open a new preview before confirming."); }
+}
 interface Host {
 	vault: Vault;
 	settings: ExternalDiffSettings;
@@ -151,12 +154,23 @@ export class RenameMatcher {
 		this.host.changed();
 	}
 
-	async confirmCandidate(sourcePath: string, diff: PendingDiff, targetPath: string): Promise<void> {
+	/** False means a fresh preview is required; no association has been made. */
+	async confirmCandidate(sourcePath: string, diff: PendingDiff, targetPath: string): Promise<boolean> {
 		const candidate = this.created.get(targetPath);
-		if (!candidate || !diff.renameCandidates?.some(item => item.path === targetPath)) {
+		const suggestion = diff.renameCandidates?.find(item => item.path === targetPath);
+		if (!suggestion) {
 			throw new Error("This match is no longer available. Review the match again.");
 		}
-		await this.confirm(sourcePath, diff, targetPath, candidate.text);
+		// Exact suggestions can be revalidated against the source after cache eviction.
+		const expected = suggestion.score === 1 ? diff.matchContent ?? diff.newContent : candidate?.text;
+		if (expected === undefined) return false;
+		try {
+			await this.confirm(sourcePath, diff, targetPath, expected);
+			return true;
+		} catch (error) {
+			if (error instanceof RenameContentChangedError) return false;
+			throw error;
+		}
 	}
 
 	async confirm(sourcePath: string, diff: PendingDiff, targetPath: string, expected: string): Promise<void> {
@@ -165,8 +179,9 @@ export class RenameMatcher {
 		if (!(target instanceof TFile) || target.extension !== "md" || targetPath === sourcePath) throw new Error("Select an existing Markdown file at a different path.");
 		const current = await vault.read(target);
 		if (this.disposed || reviews.get(sourcePath) !== diff || vault.getAbstractFileByPath(sourcePath) ||
-			target.path !== targetPath || vault.getAbstractFileByPath(targetPath) !== target || current !== expected ||
+			target.path !== targetPath || vault.getAbstractFileByPath(targetPath) !== target ||
 			this.host.busy(sourcePath) || this.host.busy(targetPath)) throw new Error("The files changed. Open a new preview before confirming.");
+		if (current !== expected) throw new RenameContentChangedError();
 		const other = reviews.get(targetPath);
 		if (other) {
 			throw new Error("The selected file has its own unfinished review. Resolve it before associating these files.");
