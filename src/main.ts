@@ -128,6 +128,7 @@ export default class ExternalDiffPlugin extends Plugin {
 		this.lifecycle = new FileLifecycle({vault: this.app.vault, settings: this.settings,
 			baselines: this.baselines, reviews: this.pendingDiffs,
 			make: (path, original, result) => this.makeDiffCallbacks(path, original, result),
+			renamed: (file, oldPath) => this.renameMatcher.rename(file, oldPath),
 			changed: () => {
 				this.renameMatcher.schedule();
 				this.refreshMissingReviews();

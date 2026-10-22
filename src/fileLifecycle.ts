@@ -10,6 +10,7 @@ interface LifecycleHost {
 	baselines: Map<string, string>;
 	reviews: Map<string, PendingDiff>;
 	make(path: string, original: string, result: string): PendingDiff;
+	renamed?(file: TAbstractFile, oldPath: string): void;
 	changed(): void;
 }
 
@@ -97,6 +98,7 @@ export class FileLifecycle {
 				reviews.set(next, diff);
 			}
 		}
+		this.host.renamed?.(file, oldPath);
 		this.host.changed();
 	}
 }

@@ -243,7 +243,8 @@ function lifecycleSetup() {
   let changed = 0;
   const lifecycle = new FileLifecycle({vault: plugin.app.vault, settings: plugin.settings,
     baselines: plugin.baselines, reviews: plugin.pendingDiffs,
-    make: (...args) => plugin.makeDiffCallbacks(...args), changed: () => { changed++; }});
+    make: (...args) => plugin.makeDiffCallbacks(...args),
+    renamed: (file, oldPath) => plugin.renameMatcher?.rename(file, oldPath), changed: () => { changed++; }});
   plugin.app.vault.rename = async (f, path) => {
     if (files.has(path)) throw new Error('occupied');
     files.delete(f.path); f.path = path; files.set(path, f);
@@ -612,6 +613,124 @@ test('uncached exact confirmation retains path, review and busy guards', async (
       assert.equal(io.writes, 0);
     } finally { matcher.dispose(); }
   }
+});
+
+test('candidate cache and suggestions follow repeated native moves without renewing expiry', async () => {
+  const {matcher, lifecycle, deleted, created, files, contents, plugin, io} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+    const candidate = matcher.created.get('new.md');
+    const observed = candidate.observed -= 60 * 1000;
+    const file = files.get('new.md');
+    for (const next of ['nested/new.md', 'elsewhere/final.md']) {
+      const previous = file.path;
+      files.delete(previous); file.path = next; files.set(next, file);
+      contents.set(next, contents.get(previous)); contents.delete(previous);
+      lifecycle.rename(file, previous);
+      assert.equal(matcher.created.has(previous), false);
+      assert.equal(matcher.created.get(next), candidate);
+      assert.equal(diff.renameCandidates[0].path, next);
+      await matcher.refresh();
+      assert.equal(diff.renameCandidates[0].path, next);
+      assert.deepEqual(matcher.serializeCandidates(), [[next, observed]]);
+    }
+    assert.equal(await matcher.confirmCandidate('old.md', diff, file.path), true);
+    assert.equal(plugin.pendingDiffs.get(file.path), diff); assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); lifecycle.dispose(); }
+});
+
+test('saved suggestions follow moves with tracking disabled and no cache', async () => {
+  const {matcher, lifecycle, deleted, created, files, contents, plugin} = matcherSetup();
+  try {
+    const diff = deleted('old.md'); created('new.md'); await matcher.refresh();
+    matcher.created.clear(); plugin.settings.trackFileRenames = false;
+    const file = files.get('new.md'); files.delete(file.path);
+    file.path = 'moved.md'; files.set(file.path, file); contents.set(file.path, matchText);
+    lifecycle.rename(file, 'new.md'); await matcher.refresh();
+    assert.deepEqual(diff.renameCandidates, [{path: 'moved.md', score: 1}]);
+    assert.equal(matcher.created.size, 0);
+    assert.equal(await matcher.confirmCandidate('old.md', diff, 'moved.md'), true);
+  } finally { matcher.dispose(); lifecycle.dispose(); }
+});
+
+test('folder moves migrate nested candidates and review references but respect path boundaries', async () => {
+  const {matcher, lifecycle, deleted, created, files, contents, plugin, io} = matcherSetup();
+  try {
+    const source = deleted('old.md');
+    created('folder/a.md'); created('folder/nested/b.md'); created('folder-other/c.md');
+    const target = plugin.makeDiffCallbacks('folder/a.md', 'initial', matchText);
+    target.draftContent = 'precious draft';
+    const editor = target.editorState = EditorState.create({doc: target.draftContent, extensions: [history()]});
+    plugin.pendingDiffs.set(target.path, target);
+    await matcher.refresh();
+    const unaffected = matcher.created.get('folder-other/c.md');
+    for (const [path, file] of [...files]) {
+      if (!path.startsWith('folder/')) continue;
+      files.delete(path); file.path = 'moved/' + path.slice('folder/'.length); files.set(file.path, file);
+      contents.set(file.path, contents.get(path)); contents.delete(path);
+    }
+    lifecycle.rename({path: 'moved'}, 'folder');
+    assert.equal(plugin.pendingDiffs.get('moved/a.md'), target);
+    assert.equal(target.draftContent, 'precious draft'); assert.equal(target.editorState, editor);
+    assert.deepEqual(target.renameSources, ['old.md']);
+    assert.deepEqual(new Set(source.renameCandidates.map(c => c.path)), new Set(['moved/a.md', 'moved/nested/b.md', 'folder-other/c.md']));
+    assert.equal(matcher.created.get('folder-other/c.md'), unaffected);
+    await matcher.refresh();
+    await assert.rejects(matcher.confirmCandidate('old.md', source, 'moved/a.md'), /unfinished review/);
+    assert.equal(await matcher.confirmCandidate('old.md', source, 'moved/nested/b.md'), true);
+    assert.equal(target.draftContent, 'precious draft'); assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); lifecycle.dispose(); }
+});
+
+test('rename collisions preserve destination cache, suggestions and independent drafts', async () => {
+  const {matcher, lifecycle, deleted, created, files, contents, plugin, io} = matcherSetup();
+  try {
+    const source = deleted('old.md'); created('moving.md'); created('occupied.md', 'other cached contents');
+    const destinationCache = matcher.created.get('occupied.md');
+    const movingReview = plugin.makeDiffCallbacks('moving.md', 'moving original', matchText);
+    const destinationReview = plugin.makeDiffCallbacks('occupied.md', 'destination original', 'other cached contents');
+    destinationReview.draftContent = 'destination draft';
+    plugin.pendingDiffs.set('moving.md', movingReview); plugin.pendingDiffs.set('occupied.md', destinationReview);
+    plugin.settings.trackFileRenames = false;
+    source.renameCandidates = [{path: 'moving.md', score: 1}, {path: 'occupied.md', score: .85}];
+    const file = files.get('moving.md'); files.delete(file.path);
+    file.path = 'occupied.md'; files.set(file.path, file); contents.set(file.path, matchText);
+    lifecycle.rename(file, 'moving.md');
+    assert.equal(matcher.created.get('occupied.md'), destinationCache);
+    assert.equal(matcher.created.has('moving.md'), false);
+    assert.deepEqual(source.renameCandidates, [{path: 'occupied.md', score: .85}]);
+    assert.equal(plugin.pendingDiffs.get('moving.md'), movingReview);
+    assert.equal(plugin.pendingDiffs.get('occupied.md'), destinationReview);
+    assert.equal(destinationReview.draftContent, 'destination draft');
+    assert.equal(await matcher.confirmCandidate('old.md', source, 'occupied.md'), false);
+    assert.equal(io.writes, 0);
+  } finally { matcher.dispose(); lifecycle.dispose(); }
+});
+
+test('moves out of Markdown remove candidates instead of leaving actionable suggestions', async () => {
+  const {matcher, lifecycle, deleted, created, files} = matcherSetup();
+  try {
+    const source = deleted('old.md'); created('new.md'); await matcher.refresh();
+    const file = files.get('new.md'); files.delete(file.path);
+    file.path = 'new.txt'; file.extension = 'txt'; files.set(file.path, file);
+    lifecycle.rename(file, 'new.md');
+    assert.equal(matcher.created.size, 0); assert.deepEqual(source.renameCandidates, []);
+  } finally { matcher.dispose(); lifecycle.dispose(); }
+});
+
+test('native moves cancel an in-flight matching pass before it restores stale paths', async () => {
+  const {matcher, lifecycle, deleted, created, files, contents} = matcherSetup();
+  try {
+    const source = deleted('old.md'); created('new.md'); await matcher.refresh();
+    const pending = matcher.refresh();
+    const file = files.get('new.md'); files.delete(file.path);
+    file.path = 'moved.md'; files.set(file.path, file); contents.set(file.path, matchText);
+    lifecycle.rename(file, 'new.md');
+    await pending;
+    assert.equal(source.renameCandidates[0].path, 'moved.md');
+    await matcher.refresh();
+    assert.equal(source.renameCandidates[0].path, 'moved.md');
+  } finally { matcher.dispose(); lifecycle.dispose(); }
 });
 
 test('fingerprints tolerate small edits and reflow, but reject empty and unrelated text', () => {

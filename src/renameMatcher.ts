@@ -1,9 +1,10 @@
-import {TFile, type Vault} from "obsidian";
+import {TFile, type TAbstractFile, type Vault} from "obsidian";
 import type {PendingDiff} from "./DiffView";
 import type {ExternalDiffSettings} from "./settings";
 import {markPresent} from "./reviewTransitions";
 import {snapshotReview, type RenameUndo} from "./reviewDraft";
 import {fingerprint, similarity, MAX_MATCH_TEXT, type Fingerprint} from "./renameSimilarity";
+import {moveRenameCandidates} from "./renameCandidateMoves";
 
 const MAX_CANDIDATES = 128;
 const MAX_TEXT = 2 * 1024 * 1024;
@@ -49,6 +50,13 @@ export class RenameMatcher {
 			this.created.delete(first);
 			this.limited = true;
 		}
+		this.schedule();
+	}
+
+	/** FileLifecycle notifies and persists after moving both reviews and candidates. */
+	rename(file: TAbstractFile, oldPath: string): void {
+		if (this.disposed) return;
+		moveRenameCandidates(this.created, this.host.reviews, this.host.vault, file, oldPath);
 		this.schedule();
 	}
 

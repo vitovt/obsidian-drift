@@ -87,7 +87,7 @@ Editing a note directly while an external review is pending shows a warning befo
 
 Enable **Track renames and deletions (experimental)** for this workflow. Upgrades combine the previous separate rename/deletion settings: if either was enabled, the combined setting is enabled.
 
-Confirmed Obsidian rename events move existing reviews to the new path, preserving their Original, draft, and session history. **Renamed from** retains the initial path through a chain of moves. Existing reviews follow recognized moves even when creating new lifecycle reviews is disabled. Folder rename events migrate existing reviews and baselines without creating one review per unchanged child.
+Confirmed Obsidian rename events move existing reviews to the new path, preserving their Original, draft, and session history. **Renamed from** retains the initial path through a chain of moves. Existing reviews follow recognized moves even when creating new lifecycle reviews is disabled. Recent candidate entries and saved suggestions also follow these events, including repeated file and folder moves, without renewing cache retention. An occupied destination cache entry or suggestion takes precedence over an incoming one. Files moved out of Markdown are removed from matching. Folder rename events migrate existing reviews and baselines without creating one review per unchanged child.
 
 External tools can deliver a rename as deletion plus creation, in either order. Drift compares a missing file's **last known contents** with recent creations. It checks identical contents and then overlap of word-sequence fingerprints. Original and edited Result are preserved separately.
 
